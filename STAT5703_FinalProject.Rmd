@@ -1,0 +1,409 @@
+---
+title: "Final Project - Audit Data"
+author: "Olivier Chabot"
+date: "24/03/2020"
+output:
+    pdf_document:
+    toc: true
+theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Statement of Problem
+
+Our audit dataset contains characteristics of 2000 individual tax returns. The objective is to predict the binary (TARGET_Adjusted) and continuous (RISK_Adjustment) target variables. The variables are:
+
+* __ID__ (Unique identifier for each person)
+
+* __Age__ (Age of person)
+
+* __Employment__ (Type of employment)
+
+* __Education__ (Highest level of education)
+
+* __Marital__ (Current marital status)
+
+* __Occupation__ (Type of occupation)
+
+* __Outcome__ (Amount of income declared)
+
+* __Gender__ (Gender of person)
+
+* __Deductions__ (Total amount of expenses that a person claims in their financial statement)
+
+* __Hours__ (Average hours worked on a weekly basis)
+
+* __Risk_Adjustment__ (The continuous target variable; this variable records the monetary amount of any adjustment to the person’s financial stuatus as a result of a productive audit.  This variable is a measure of the size of the risk associated with the person)
+
+* __TARGET_Adjusted__ (The binary target variable for classification modeling (0/1), indicating nonproductive and productive audits, respectively. Productive audits are those that result in an adjustment being made to a client’s financial statement.) 
+
+# Data Exploration & Visualization
+
+```{r}
+
+# Loading the data set
+
+audit <- read.csv("audit.csv")
+
+# Loading libraries
+
+library(ggplot2) # For basics graphs
+
+library(GGally) # For scatter plot matrix
+
+library(dplyr) # To manipulate and explore data
+
+
+# Looking at the structure of our data
+
+glimpse(audit)
+
+```
+
+Note that "Absent" is a possible answer for marrital status. According to https://www.census.gov/prod/2003pubs/c2kbr-30.pdf:
+
+"Marital status: The marital status classification refers to the status
+on the census date, April 1, 2000. The “now married” category
+includes those who were “married, spouse present” and those who
+were “married, spouse absent.” These latter two subcategories were
+determined in the processing and editing steps by the presence or
+absence of a spouse in the household as ascertained from the relationship-to-householder question on the long form and the assignment of people to related subfamilies. “Married, spouse present”
+applies to husbands and wives if both were living in the same household. “Married, spouse absent” applies to husbands and wives who
+answered that they were “Now married” on the census form but no
+spouse could be found who could be linked to them in the editing
+stages. Since people in group quarters housing (for example, institutions or shelters) were not asked the relationship item, all people in
+group quarters housing who reported that they were “Now married”
+were subsequently assigned to the “Married, spouse absent” category
+in the recoding steps. "
+
+Thus, absent would be someone who is married but living away (in a nursing home). Married but spouse absent would be a person who is married their their spouse is living somewhere else.
+
+The unique identifier variable is irrevelant to our analysis. Employment, Occupation, Marital are all nominal categorical variables with lots of levels and thus can be ignored for the scatterplot matrix. Education however can be considered as an ordinal variable.
+
+```{r}
+
+levels(audit$Education)
+
+```
+
+We might assign values to each education level according to the following hierarchy:
+
+* Doctorate (13)
+
+* Master/Professional (12)
+
+* Bachelor (11)
+
+* Associate (10)
+
+* College/Vocational (9)
+
+* High school graduate (8)
+
+* Grade 12 (7)
+
+* Grade 11 (6)
+
+* Grade 10 (5)
+
+* Grade 9 (4)
+
+* Grade 7 to 8 (3)
+
+* Grade 5 to 6 (2)
+
+* Grade 1 to 4 (1)
+
+* Preschool (0)
+
+
+```{r}
+# Ordinal Education
+
+edu_levels <- as.character(levels(audit$Education))
+edu_rank <- c(10, 11, 9, 13, 8, 12, 0, 12, 9, 5, 6, 7, 1, 2, 3, 4)
+
+audit$Education <- as.character(audit$Education)
+
+class(audit$Education)
+
+for (i in 1:16){
+
+  for (j in 1:2000){
+    if (audit[j, 4] == edu_levels[i]){
+      audit[j, 4] <- edu_rank[i]
+    }
+
+  }
+
+}
+
+head(audit, n = 10)[ , 1:8]
+
+audit$Education <- as.factor(audit$Education)
+
+class(audit$Education)
+```
+
+We can use a scatterplot matrix to get an overview of our reduced data.
+
+```{r}
+
+ 
+# Scatterplot matrix
+
+# base r
+
+pairs(audit[ , -c(1, 3, 5, 6)], col = audit$TARGET_Adjusted + 4)
+
+```
+
+Some clusters seem to be present(Age, Deductions)|(Income, deduction)|(education hours)|(Hours, deductions)
+
+```{r, eval = FALSE}
+# ggplot version
+
+audit$TARGET_Adjusted <- as.factor(audit$TARGET_Adjusted)
+
+# Check correlations (as scatterplots), distribution and print corrleation coefficient
+ggpairs(audit[ , -c(1, 3, 5, 6)], ggplot2::aes(colour = audit$TARGET_Adjusted), 
+        title="correlogram with ggpairs()")
+```
+
+
+
+
+```{r}
+# Class version
+source("pairs_ext.r")
+
+pairs(audit[ , -c(1, 3, 5, 6)], upper.panel = panel.cor, diag.panel = panel.hist)
+
+audit <- read.csv("audit.csv")
+```
+
+The average number of hours worked on a weekly basis looks weird as well. Let's take a look at it.
+
+```{r}
+plot_multi_histogram <- function(df, feature, label_column) {
+    plt <- ggplot(df, aes(x=eval(parse(text=feature)), fill=eval(parse(text=label_column)))) +
+    geom_histogram(alpha=0.7, position="identity", aes(y = ..density..), color="black") +
+    geom_density(alpha=0.7) +
+    geom_vline(aes(xintercept=mean(eval(parse(text=feature)))), color="black", linetype="dashed", size=1) +
+    labs(x=feature, y = "Density")
+    plt + guides(fill=guide_legend(title=label_column))
+}
+
+audit$TARGET_Adjusted <-as.factor(audit$TARGET_Adjusted)
+class(audit$TARGET_Adjusted)
+
+plot_multi_histogram(audit, 'Hours','TARGET_Adjusted')
+
+```
+
+```{r}
+
+# Boxplot of Hours
+
+ggplot(data = audit, aes(y = audit$Hours)) +
+  geom_boxplot()
+
+# Relationship between outlier hours and income?
+
+ggplot(data = audit, aes(x = audit$Hours, y = audit$Income)) +
+  geom_point() + 
+  scale_x_continuous(name="Hours") +
+  scale_y_continuous(name="Income",
+                     labels = scales::comma)
+```
+
+100 hour work-week is not impossible dig deeper into those cases. Maybe mistakes. We care more about the people who work __long hours__ and __do not__ report a high income. 
+
+```{r}
+audit <- read.csv("audit.csv")
+
+audit[which((audit$Hours > 60) & (audit$Income < 30000)), -c(1, 2, 5, 8)]
+```
+
+A risk adjustment of 99 999$ is suspicious. Perhaps an error?
+
+
+We can take a look at the summary of our data to d
+```{r}
+# Looking for outliers
+
+summary(audit)
+```
+
+Note that __Employment__ has 100 NA's while __Occupation__ has 101 NA's. 
+
+```{r}
+which(is.na(audit$Employment) != is.na(audit$Occupation))
+which(audit$Employment == "Unemployed")
+```
+
+Row 50 has an NA for __Occupation__ but it has "unemployed" for the __Employment__ variable. The NA for Occupation is a really a Not Applicable instead of a missing value.
+
+A few risk adjustments are negative.
+
+```{r}
+which(audit$RISK_Adjustment < 0)
+
+audit[which(audit$RISK_Adjustment < 0), -c(1, 2, 5, 8)]
+```
+
+Nothing suspicious here. Let's look at the risk adjustment variable.
+
+
+```{r}
+
+which(audit$RISK_Adjustment > 50000)
+
+reduced_audit <- audit[which(audit$RISK_Adjustment > 50000), ]
+
+audit[which(audit$RISK_Adjustment > 50000), -c(1, 2, 5, 8)]
+
+ggplot(data = reduced_audit, aes(x = reduced_audit$Income,
+                                 y = reduced_audit$RISK_Adjustment,
+                                 size = reduced_audit$Hours,
+                                 colour = reduced_audit$Education)) +
+  geom_point()
+```
+
+There a many adjustments of 99 999. Let's investigate further...
+
+### Normalizing the data
+
+```{r}
+f.data.std <- function(data) {
+data <- as.matrix(data) 
+bar <- apply(data, 2, mean) 
+s <- apply(data, 2, sd) 
+t((t(data) - bar)/s)
+}
+```
+
+```{r}
+Age_N <- f.data.std(audit$Age)
+Income_N <- f.data.std(audit$Income)
+Deductions_N <- f.data.std(audit$Deductions)
+Hours_N <- f.data.std(audit$Hours)
+Risk_N <- f.data.std(audit$RISK_Adjustment)
+audit_N <- cbind(audit, Age_N, Income_N, Deductions_N, Hours_N, Risk_N)
+
+head(audit_N, n = 10)
+```
+
+
+
+
+
+# Dimension Reduction
+
+# Data Reduction
+
+# Unsupervised Learning - Clustering
+
+# Supervised Learning - Modelling / Classification
+
+## Modelling 
+
+### Linear models
+
+We can start with Ordinary Least Squares regression: 
+
+```{r}
+# Set seed for reproducibility 
+set.seed(23)
+
+# Create test training split 
+n <- nrow(audit)
+train_indices <- sample(1:n, size = round(0.8 * n, 0), replace = FALSE)
+train_audit <- audit[train_indices, ]
+test_audit <- audit[-train_indices, ]
+
+# Using just training data: 
+# Start with just numeric variables
+lmod1 <- lm(RISK_Adjustment ~ Income + Deductions + Hours, data = train_audit)
+# Predict on test: 
+lmod1_predict <- predict(lmod1, test_audit)
+
+# Just numeric variables, without intercept term 
+lmod2 <- lm(RISK_Adjustment ~ Income + Deductions + Hours - 1, data = train_audit)
+# Predict on test: 
+lmod2_predict <- predict(lmod2, test_audit)
+
+# Create table comparing AIC, adjusted R^2 of various models, % diff on predictions
+results_train <- data.frame(R2 = c(summary(lmod1)$adj.r.squared, summary(lmod2)$adj.r.squared),
+                            AIC = c(AIC(lmod1), AIC(lmod2)), 
+                            avg_percent_diff = c(mean(lmod1_predict - test_audit$RISK_Adjustment),
+                                             mean(lmod2_predict - test_audit$RISK_Adjustment)))
+
+# Using all data:
+# Start with just numeric variables
+lmod1 <- lm(RISK_Adjustment ~ Income + Deductions + Hours, data = audit)
+
+# Just numeric variables, without intercept term 
+lmod2 <- lm(RISK_Adjustment ~ Income + Deductions + Hours - 1, data = audit)
+
+# All predictor variables
+lmod1 <- lm(RISK_Adjustment ~ Age + Employment + Education + Marital + Occupation + 
+              Income + Gender + Deductions + Hours, data = audit)
+
+# Create table comparing AIC, adjusted R^2 of various models 
+results_train <- data.frame(R2 = c(summary(lmod1)$adj.r.squared, summary(lmod2)$adj.r.squared),
+                            AIC = c(AIC(lmod1), AIC(lmod2)),
+                            MSE = c(sum(lmod1$residuals^2), sum(lmod2$residuals^2)))
+
+# Look at some diagnostic plots (neither meet the assumptions clearly)
+par(mfrow = c(1, 2))
+plot(lmod1, which = 2)
+plot(lmod2, which = 2)
+
+# Look at observation 1551 (outlier from the previous plot)
+# Only declared 23800, risk adjustment of 112243??? 
+audit[1551, ]
+```
+
+## Regression trees
+
+```{r}
+
+info.dev <- make.tree(formula = audit ~ ., sdf.flea, min.per.leaf = 5, 
+                      what.measure = "deviance")
+
+plot(df.flea[,1],df.flea[,6],col = species + 1, xlab = "tars1", ylab = "aede3",
+     main = "Deviance", pch = 19)
+lines(c(118,245),c(93.5,93.5))
+lines(c(159,159),c(93.5,125))
+```
+
+```{r, message = FALSE}
+# Load Dr. Mills' code for making classification trees
+source("ClassificationTree.R")
+
+# Keep normalized predictor variables, drop ID and Risk variables
+audit_classify <- audit_N[, c(13, 3:6, 14, 8, 15:16, 12)]
+audit_classify$TARGET_Adjusted <- as.factor(audit_classify$TARGET_Adjusted)
+
+# Create classification tree using deviance as measure
+tree_dev <- make.tree(formula = TARGET_Adjusted ~ ., data = audit_classify, 
+                      min.per.leaf = 5, what.measure = "deviance")
+
+# Visualize the results of the tree, pick two variables
+plot(audit_classify$Age_N, audit_classify$Income_N,
+     col = audit_classify$TARGET_Adjusted, 
+     xlab = "Age (Normalized)", ylab = "Income (Normalized)",
+     main = "Deviance", pch = 19)
+lines(c(118,245),c(93.5,93.5))
+lines(c(159,159),c(93.5,125))
+
+library(tree)
+tree_dev <- tree(TARGET_Adjusted ~., data = audit_classify)
+plot(tree_dev, type = "uniform")
+text(tree_dev, all = TRUE)
+```
+
