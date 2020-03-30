@@ -277,6 +277,17 @@ There a many adjustments of 99 999. Let's investigate further...
 
 ### Normalizing the data
 
+
+Another function for summarizing the data 
+
+```{r}
+library(skimr)
+skim(audit)
+```
+
+Standardizing the data using the correlation transformation, section 3.4.2 notes
+
+
 ```{r}
 f.data.std <- function(data) {
 data <- as.matrix(data) 
@@ -284,22 +295,14 @@ bar <- apply(data, 2, mean)
 s <- apply(data, 2, sd) 
 t((t(data) - bar)/s)
 }
-```
 
-```{r}
 Age_N <- f.data.std(audit$Age)
 Income_N <- f.data.std(audit$Income)
 Deductions_N <- f.data.std(audit$Deductions)
 Hours_N <- f.data.std(audit$Hours)
 Risk_N <- f.data.std(audit$RISK_Adjustment)
 audit_N <- cbind(audit, Age_N, Income_N, Deductions_N, Hours_N, Risk_N)
-
-head(audit_N, n = 10)
 ```
-
-
-
-
 
 # Dimension Reduction
 
@@ -307,7 +310,321 @@ head(audit_N, n = 10)
 
 # Unsupervised Learning - Clustering
 
-# Supervised Learning - Modelling / Classification
+# Supervised Learning - Classification and Modelling 
+
+## Set-Up: Training and Test Set
+
+Before we begin supervised learning, we should split our data into a training and test set so that we can evaluate the performance of our models. We will also re-normalize our numeric predictor variables, within the training set and testing set separately. In the real world, if we only had a training set, we would not have the test set to inform our normalization, so it is essential to normalize them separately if we want to accurately measure the performance of our models. 
+
+Once the training and test sets have been created, it is important to examine the distribution of the classes (and the response variable) between the training and test set. Since there are very few productive audits in our dataset, we need to ensure that both productive and nonproductive audits are represented adequately in both the training set and the test set. The following plots show the distributions of the response variables of interest, using an 80 / 20 split for training / test size.
+
+```{r}
+# Set seed for reproducibility
+set.seed(12)
+
+# Create test training split 
+n <- nrow(audit)
+ntrain <- round(0.8 * n, 0)
+ntest <- nrow(audit) - ntrain 
+train_indices <- sample(1:n, size = ntrain, replace = FALSE)
+train_audit <- audit[train_indices, ]
+test_audit <- audit[-train_indices, ]
+
+# Normalize numeric predictor variables, separately between training and test sets
+train_audit$Age <- f.data.std(train_audit$Age)
+train_audit$Income <- f.data.std(train_audit$Income)
+train_audit$Deductions <- f.data.std(train_audit$Deductions)
+train_audit$Hours <- f.data.std(train_audit$Hours)
+test_audit$Age <- f.data.std(test_audit$Age)
+test_audit$Income <- f.data.std(test_audit$Income)
+test_audit$Deductions <- f.data.std(test_audit$Deductions)
+test_audit$Hours <- f.data.std(test_audit$Hours)
+
+# Convert classification variable to a factor variable 
+train_audit$TARGET_Adjusted <- as.factor(train_audit$TARGET_Adjusted)
+test_audit$TARGET_Adjusted <- as.factor(test_audit$TARGET_Adjusted)
+
+# Create dataframe to be used for modelling the RISK_Adjustment variable
+# Remove ID variable, and TARGET_Adjusted variable
+train_audit_m <- train_audit[, -c(1, 12)]
+test_audit_m <- test_audit[, -c(1, 12)]
+# Create dataframe to be used for classifying the TARGET_Adjusted variable
+# Remove the ID variable, and RISK_Adjustment variable
+train_audit_c <- train_audit[, -c(1, 11)]
+test_audit_c <- test_audit[, -c(1, 11)]
+
+# Visualize the distribution of classes (and response) between training / test sets
+par(mfrow = c(2, 2))
+barplot(prop.table(table(train_audit$TARGET_Adjusted)), main = "Training set",
+        xlab = "TARGET_Adjusted", ylab = "Proportion of observations")
+barplot(prop.table(table(test_audit$TARGET_Adjusted)), main = "Test set", 
+        xlab = "TARGET_Adjusted", ylab = "Proportion of observations")
+hist(train_audit$RISK_Adjustment, probability = TRUE, main = "Training set", 
+     xlab = "RISK_Adjustment", ylab = "Proportion of observations",
+     xlim = c(0, 120000), col = "grey")
+hist(test_audit$RISK_Adjustment, probability = TRUE, main = "Test set", 
+     xlab = "RISK_Adjustment", ylab = "Proportion of observations",
+     xlim = c(0, 120000), col = "grey")
+```
+
+The distributions look approximately equal, and we can proceed.
+
+## Classification 
+
+### Classification trees
+
+One way of classifying our observations into productive and nonproductive audits is through the use of classification trees. There are many ways in R to create classification trees, but we will start by using the `tree` package. The figures below show the resulting classification trees on the training dataset, using the deviance (first tree) and the generalized gini index (second tree) as the measures. Note that the labels have been turned off in the second plot, as the plot of the second tree becomes unreadable otherwise (highly concentrated at the bottom of the tree, implying that the decrease in impurity is fairly low in the bottom branches -- pruning may be necessary). 
+
+```{r, message = FALSE}
+# Load libraries for creating decision trees
+library(tree)
+
+# Use deviance:
+# Note: mincut is the minimum number of observations per node
+tree_dev <- tree(formula = TARGET_Adjusted ~., data = train_audit_c,
+                 split = "deviance", mincut = 5)
+# Use generalized gini
+tree_gini <- tree(formula = TARGET_Adjusted ~., data = train_audit_c,
+                  split = "gini", mincut = 5)
+
+# Load Dr. Mills' code
+source("ejnplottree.r")
+source("ejntexttree.r")
+source("EJNPartitionTree.r")
+
+# Visualize the results 
+plot.tree.EJN(tree_dev)
+text.tree.EJN(tree_dev, all = TRUE)
+plot.tree.EJN(tree_gini)
+
+# Calculate prediction accuracy on the test set 
+tree_dev_predict <- predict(tree_dev, test_audit_c, type = "class")
+tree_gini_predict <- predict(tree_gini, test_audit_c, type = "class")
+prop_correct_dev <- length(which(tree_dev_predict == test_audit_c$TARGET_Adjusted)) / ntest
+prop_correct_gini <- length(which(tree_gini_predict == test_audit_c$TARGET_Adjusted)) / ntest
+```
+
+Using the proportion of correctly classified observations in the test set as a measure of model accuracy, the above models had accuracies on the test set of 86.5% and 83% respectively.
+
+One problem with the plotting that we can see immediately is that the `tree` package does not plot categorical variables very well. Rather than displaying the names of categories, the plot displays a concatenation of letters corresponding to the positions of the level names. For example, the first split on the tree on the left is based on the `Marital` vlariable. The plot includes the letters "abdef" on this split, which actually means levels 1, 2, 4, 5 and 6 of the `Marital` variable (corresponding to the categories "Absent", "Divorced", "Married-spouse-absent", "Unmarried" and "Widowed"). 
+
+In order to create a plot that is a bit more clear about the decision rules, we can use the `rpart` and `rpart.plot` packages. We note that the trees may appear slightly different between the `tree` package implementation and the `rpart` package implementation even if the trees are fairly similar (the `rpart` package does not always create decision rules in the form *var < split*). The plot below shows the classification tree created by the `rpart` package, using the entire dataset. We have used the same value for the minimum number of observations per node as we used in the previous two plots: 
+
+```{r}
+# Load libraries for creating more visually appealing classification trees
+library(rpart)
+library(rattle)
+library(RColorBrewer)
+library(rpart.plot)
+
+# Create decision tree
+# Note: minsplit is the minimum number of observations per node
+tree_rpart <- rpart(formula = TARGET_Adjusted ~., data = train_audit_c,
+                    method = "class", minsplit = 5)
+
+# Plot the tree
+fancyRpartPlot(tree_rpart, sub = "Classification tree created using the rpart package")
+```
+
+Here, we can see that the plot becomes much more readable. For example, the first node now shows us which levels of the `Marital` variable correspond with going left or right down the tree. 
+
+#### Pruning 
+
+*Pruning* classification trees can help to prevent overfitting, removing the least important splits from our tree. The `cv.tree` function will perform K-fold cross validation for us, determining the best splits to prune. 
+
+The plot below shows the size of the tree versus the deviance (using 10-fold cross validation) for the two trees created using the `tree` package, and we can see that the lowest deviance occurs when the size of the tree is 4 for the first tree, and when the size is 5 for the second tree. 
+
+```{r}
+# Perform 10-fold CV 
+tree_cv_dev <- cv.tree(tree_dev, FUN = prune.tree, K = 10)
+tree_cv_gini <- cv.tree(tree_gini, FUN = prune.tree, K = 10)
+
+# Plot the size of the tree versus the deviance
+par(mfrow = c(1, 2))
+plot(tree_cv_dev)
+plot(tree_cv_gini)
+```
+
+We can now use the results of this cross validation to visualize the trees that occurs when we prune them as per the suggested sizes: 
+
+```{r}
+# Use the results of the cross validation to plot the pruned trees
+par(mfrow = c(1, 2))
+pruned_tree_dev <- prune.misclass(tree_dev, best = 4)
+plot.tree.EJN(pruned_tree_dev)
+text.tree.EJN(pruned_tree_dev, all = TRUE)
+pruned_tree_gini <- prune.misclass(tree_gini, best = 5)
+plot.tree.EJN(pruned_tree_gini)
+text.tree.EJN(pruned_tree_gini, all = TRUE)
+```
+
+Now, the trees look much cleaner. The accuracy on the test set has also increased: 
+
+```{r}
+pruned_tree_dev_pred <- predict(pruned_tree_dev, test_audit_c, type = "class")
+pruned_tree_gini_pred <- predict(pruned_tree_gini, test_audit_c, type = "class")
+prop_correct_dev_prune <- length(which(pruned_tree_dev_pred == test_audit_c$TARGET_Adjusted)) / ntest
+prop_correct_gini_prune <- length(which(pruned_tree_gini_pred == test_audit_c$TARGET_Adjusted)) / ntest
+
+# Create table to display the results
+results <- data.frame(Original = c(prop_correct_dev, prop_correct_gini),
+                      Pruned = c(prop_correct_dev_prune, prop_correct_gini_prune))
+row.names(results) <- c("Deviance", "Gini")
+
+# Display the results
+library(kableExtra)
+kable(results) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+We can see that the pruning had a positive impact on the second tree, reducing overfitting and improving the test accuracy. 
+
+#### Bagging 
+
+*Bagging*, or Boostrap Aggregating, is a method we can use to improve the stability of algorithms (such as classification trees). 
+
+Within our training data, we will do the following a total of 100 times: 
+
+- Split the data into a train and test set; let the size of the train set be $N$
+- Create 50 bootstrap replicates (creating a sample of size $N$ by sampling from the training set with replacement)
+- Create a tree for each of the 50 bootstrap replicates, pruning as needed
+- Use the 50 trees to "vote" on the correct classes for each observation in the test set
+
+At the end, the 100 results will be used to perform another vote. 
+
+```{r}
+# Set seed for reproducibility 
+set.seed(2020)
+
+# Create a function to get the most commonly occurring value in a vector
+# We will use this to determine the "winner" of "votes"
+# Do not consider 0s as this will give us problems when combining the 100 votes at the end
+getmode <- function(x) {
+   uniqx <- unique(x)
+   if (0 %in% uniqx == FALSE) {
+     return(uniqx[which.max(tabulate(match(x, uniqx)))])
+   } else {
+     x <- x[x != 0]
+     uniqx <- unique(x)
+   }
+   return(uniqx[which.max(tabulate(match(x, uniqx)))])
+}
+```
+
+```{r, eval = FALSE}
+# Size of our dataset 
+N <- round(0.9 * ntrain, 0)
+# Number of bootstrap replicates we will take at each iteration
+sz <- 50
+# Create a matrix to store our results
+bag <- matrix(0, nrow = ntrain, ncol = 100)
+# Create a list to store all of our trees
+rep.trees <- vector(mode = "list", length = 100)
+
+# Perform the bagging 
+for (j in 1:100) {
+  # Create a train / test split (use 90 / 10)
+  temp <- 1:ntrain 
+  train_idx <- sample(temp, size = N
+                      , replace = FALSE)
+  test_idx <- temp[temp %in% train_idx == FALSE]
+  train <- train_audit_c[train_idx, ]
+  test <- train_audit_c[test_idx, ]
+  size_train <- N
+  size_test <- ntrain - size_train
+  
+  # Create the bootstrap replicates and vote 
+  replicates <- matrix(0, nrow = sz, ncol = N)
+  rep.trees[[j]] <- vector(mode = "list", length = sz)
+  pred.tree <- matrix(0, nrow = size_test, ncol = sz)
+  for (i in 1:sz) {
+    # Create 50 bootstrap replicates by sampling (w replacement) from original training set
+    replicates[i, ] <- sample(1:N, size = N, replace = TRUE)
+    
+    # Create trees for each of the 50 bootstrap replicates
+    rep.trees[[j]][[i]] <- rpart(formula = TARGET_Adjusted ~ ., 
+                                 data = train[replicates[i, ], ])
+    
+    # Use the 50 trees to predict the classes of the test observations
+    pred.tree[, i] <- predict(rep.trees[[j]][[i]], test, type = "class")
+  }
+
+  # Vote on the classes of the test observations, using the predictions from the 50 trees
+  bag[test_idx, j] <- apply(pred.tree, 1, getmode)
+}
+
+# Save results in a file 
+save(bag, file = "bag.RDa")
+save(rep.trees, file = "rep.trees.RDa")
+```
+
+```{r}
+# Load the saved files
+load("bag.RDa")
+load("rep.trees.RDa")
+
+# Vote on the classes of the observations, using the 100 iterations 
+bag.class <- apply(bag, 1, getmode)
+
+# Check the training accuracy 
+train_acc_bag <- sum(bag.class == as.numeric(train_audit_c$TARGET_Adjusted)) / ntrain 
+
+# Use the models to predict the classes of the test set
+bag_test <- matrix(0, nrow = ntest, ncol = 100)
+for (j in 1:100) {
+  temp_predictions <- matrix(NA, nrow = ntest, ncol = 50)
+  for (i in 1:50) {
+    temp_predictions[, i] <- as.numeric(predict(rep.trees[[j]][[i]], 
+                                                      test_audit_c, type = "class"))
+  }
+  bag_test[, j] <- apply(temp_predictions, 1, FUN = getmode)
+}
+# Vote on the classes of observations in test_audit_c, using the 100 iterations
+bag_test_class <- apply(bag_test, 1, FUN = getmode)
+
+# Check the prediction accuracy on the test set
+test_acc_bag <- sum(bag_test_class == as.numeric(test_audit_c$TARGET_Adjusted)) / ntest
+```
+
+Using the bagging, we obtain a training accuracy (on our 1600 observations) of 83.0625%. Using the models from the bagging on our reserved test set (400 observations), we obtain a test accuracy of 88.25%, which is a huge improvement! The bagging was highly successful.
+
+#### Random Forests
+
+*Random Forests* are an extension of bagging, where features are also randomly selected. Although we did not cover this topic during lecture, random forests are a very popular technique and are easy to create in R, so we will try a simple model. 
+
+Note that with the `randomForest` function in R, we need to choose a way of handling missing data. Here, we will simply omit the incomplete observations. 
+
+When using the `randomForest` function in R, there is one main parameter to tune: `mtry`. This is the number of variables that are randomly sampled as candidates at each split. The plot below shows the model accuracy on the test set for varying values of `mtry`: 
+
+```{r}
+# Load library for creating random forests
+library(randomForest)
+
+# Set seed for reproducibility 
+set.seed(41)
+
+# Since we have 9 predictor variables, we will vary the value of mtry from 1 to 9
+mtry <- 1:9
+
+# Create the random forests, store the accuracy on the test set 
+rf_test_acc <- vector(length = 9)
+for (i in 1:9) {
+  rf <- randomForest(formula = TARGET_Adjusted ~., data = train_audit_c, 
+                     na.action = na.omit, mtry = mtry[i], ntree = 500)
+
+  # Predict the classes of the test set using the random forest model 
+  rf_predict <- predict(rf, newdata = test_audit_c)
+
+  # Compute the accuracy on the test set 
+  matches <- rf_predict == test_audit_c$TARGET_Adjusted
+  rf_test_acc[i] <- sum(matches, na.rm = TRUE) / length(which(is.na(matches) == FALSE)) 
+}
+
+plot(mtry, rf_test_acc, type = "l", main = "Test Accuracy using Random Forests", 
+     xlab = "Value of mtry", ylab = "Test accuracy (percent)")
+```
+
+The highest accuracy occurred when `mtry` was set to 4. In this case, the prediction accuracy on the test set was 87.2%. While this is a bit lower than what we obtained with bagging, it should be noted that the computational time for this method was significantly lower than it was for bagging. 
 
 ## Modelling 
 
@@ -329,6 +646,7 @@ test_audit <- audit[-train_indices, ]
 # Start with just numeric variables
 lmod1 <- lm(RISK_Adjustment ~ Income + Deductions + Hours, data = train_audit)
 # Predict on test: 
+
 lmod1_predict <- predict(lmod1, test_audit)
 
 # Just numeric variables, without intercept term 
@@ -368,42 +686,12 @@ plot(lmod2, which = 2)
 audit[1551, ]
 ```
 
-## Regression trees
 
-```{r}
 
-info.dev <- make.tree(formula = audit ~ ., sdf.flea, min.per.leaf = 5, 
-                      what.measure = "deviance")
 
-plot(df.flea[,1],df.flea[,6],col = species + 1, xlab = "tars1", ylab = "aede3",
-     main = "Deviance", pch = 19)
-lines(c(118,245),c(93.5,93.5))
-lines(c(159,159),c(93.5,125))
-```
+# References
 
-```{r, message = FALSE}
-# Load Dr. Mills' code for making classification trees
-source("ClassificationTree.R")
+https://rstudio-pubs-static.s3.amazonaws.com/202050_60f5c6dd1b884ba3ac29f1aef5c848bb.html
 
-# Keep normalized predictor variables, drop ID and Risk variables
-audit_classify <- audit_N[, c(13, 3:6, 14, 8, 15:16, 12)]
-audit_classify$TARGET_Adjusted <- as.factor(audit_classify$TARGET_Adjusted)
 
-# Create classification tree using deviance as measure
-tree_dev <- make.tree(formula = TARGET_Adjusted ~ ., data = audit_classify, 
-                      min.per.leaf = 5, what.measure = "deviance")
-
-# Visualize the results of the tree, pick two variables
-plot(audit_classify$Age_N, audit_classify$Income_N,
-     col = audit_classify$TARGET_Adjusted, 
-     xlab = "Age (Normalized)", ylab = "Income (Normalized)",
-     main = "Deviance", pch = 19)
-lines(c(118,245),c(93.5,93.5))
-lines(c(159,159),c(93.5,125))
-
-library(tree)
-tree_dev <- tree(TARGET_Adjusted ~., data = audit_classify)
-plot(tree_dev, type = "uniform")
-text(tree_dev, all = TRUE)
-```
 
