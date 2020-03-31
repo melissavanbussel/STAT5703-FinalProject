@@ -277,17 +277,6 @@ There a many adjustments of 99 999. Let's investigate further...
 
 ### Normalizing the data
 
-
-Another function for summarizing the data 
-
-```{r}
-library(skimr)
-skim(audit)
-```
-
-Standardizing the data using the correlation transformation, section 3.4.2 notes
-
-
 ```{r}
 f.data.std <- function(data) {
 data <- as.matrix(data) 
@@ -295,14 +284,22 @@ bar <- apply(data, 2, mean)
 s <- apply(data, 2, sd) 
 t((t(data) - bar)/s)
 }
+```
 
+```{r}
 Age_N <- f.data.std(audit$Age)
 Income_N <- f.data.std(audit$Income)
 Deductions_N <- f.data.std(audit$Deductions)
 Hours_N <- f.data.std(audit$Hours)
 Risk_N <- f.data.std(audit$RISK_Adjustment)
 audit_N <- cbind(audit, Age_N, Income_N, Deductions_N, Hours_N, Risk_N)
+
+head(audit_N, n = 10)
 ```
+
+
+
+
 
 # Dimension Reduction
 
@@ -370,6 +367,84 @@ hist(test_audit$RISK_Adjustment, probability = TRUE, main = "Test set",
 The distributions look approximately equal, and we can proceed.
 
 ## Classification 
+
+### k-NN (k Nearest Neighbours)
+
+A simple classification method is *k Nearest Neighbours.* In this method, the $k$ closest vectors in the training set (in terms of Euclidean distance) are found for each observation in the test set. The classification of an observation in the test set is then decided by performing a "vote" using the $k$ closest vectors. If there are any ties, the ties are broken at random. Additionally, if there are ties in terms of finding the $k^{th}$ nearest vector, all of the candidate vectors are included in the "voting" process. We will be using the `class` package to perform the classification.
+
+Since we are dealing with the Euclidean distance, we will have to consider only our numeric variables in this case.
+
+In the figure below, we plot the proportion of correctly classified observations in the test set as a function of the value of $k$. 
+
+```{r}
+# Load library for performing kNN
+library(class)
+
+# Set seed for reproducibility 
+set.seed(19)
+
+# Get just the numeric variables 
+audit_num_train <- train_audit_c[, c(1, 6, 8:9), ]
+audit_num_test <- test_audit_c[, c(1, 6, 8:9), ]
+
+# Try varying values of k 
+k <- 1:50
+
+# Perform kNN 
+knn_test_acc <- vector(length = 50)
+for (i in 1:length(knn_test_acc)) {
+  knn_audit <- knn(train = audit_num_train, test = audit_num_test, 
+                 cl = train_audit_c$TARGET_Adjusted, k = k[i])
+  knn_test_acc[i] <- sum(knn_audit == test_audit_c$TARGET_Adjusted) / ntest
+}
+
+# Create plot of results
+plot(k, knn_test_acc, main = "Test accuracy of k Nearest Neighbours", 
+     xlab = "k", ylab = "Test set accuracy", type = "l")
+```
+
+From the plot, we can see that the value of $k$ which resulted in the highest classification accuracy on the test set was $k = 22$, resulting in an accuracy of 79%.
+
+### Linear and Quadratic Discriminant Analysis
+
+*Discriminant analysis* is a classification technique that uses the training data to determine the boundaries which best separate the classes. We treat the observations of each class as observations from a multivariate normal (MVN) distribution, and compute the boundaries using a formula which depends on the parameters of the MVN distributions. If we assume that the covariance matrices of all the MVN distributions are the same, we perform *Linear Discriminant Analysis* (LDA) and the resulting boundaries are lines. If we relax this assumption, we peform *Quadratic Discriminant Analysis* (QDA) and the resulting boundaries are quadratic. LDA is computationally easy to perform, but linear boundaries may not always be appropriate. QDA gives us more freedom with our boundaries, at the expense of taking longer to perform. 
+
+We will use the `MASS` package to perform the discriminant analysis. This package requires an option to be specified for missing values. We will simply omit the missing values in the calculation.
+
+```{r}
+# Load library
+library(MASS)
+
+# Perform LDA 
+audit_lda <- lda(formula = TARGET_Adjusted ~ ., data = train_audit_c[, c(1, 6, 8:10)],  
+                 na.action = na.omit)
+lda_predict <- predict(audit_lda, test_audit_c)
+lda_test_acc <- sum(lda_predict$class == test_audit_c$TARGET_Adjusted) / ntest 
+
+# Perform QDA
+audit_qda <- qda(formula = TARGET_Adjusted ~ ., data = train_audit_c[, c(1, 6, 8:10)],  
+                 na.action = na.omit)
+qda_predict <- predict(audit_qda, test_audit_c)
+qda_test_acc <- sum(qda_predict$class == test_audit_c$TARGET_Adjusted) / ntest 
+```
+
+With LDA, our proportion of correctly classified test observations is 0.8, while it is 0.7925 with QDA. Although this may make it seem like LDA is the superior method, this is not the case -- LDA is a subset of QDA, and thus should QDA be able to obtain the same results as LDA given a large enough training set that is representative of the testing set. 
+
+Since we performed the discriminatory analysis on more than two numeric variables, we are unable to visualize the results the exact way we did in lecture. There will not be clear lines (or quadratic curves) that separate the class predictions *perfectly* on a 2-dimensional plot, since the calculations were completed in 4 dimensions. Instead, we can create plots of the different 2 variable combinations, using the `klaR` package. Note that the plots below are created for the training data, and do not include any information about the test data.
+
+```{r}
+# Load library 
+library(klaR)
+
+# Note: The partimat function calls the lda() and qda() functions from the MASS package
+# Create plot of LDA results on each of the 2 variable combinations 
+partimat(formula = TARGET_Adjusted ~ ., data = train_audit_c[, c(1, 6, 8:10)], 
+         method = "lda", na.action = na.omit, main = "LDA on Audit data")
+
+# Create plot of LDA results on each of the 2 variable combinations 
+partimat(formula = TARGET_Adjusted ~ ., data = train_audit_c[, c(1, 6, 8:10)], 
+         method = "qda", na.action = na.omit, main = "QDA on Audit data")
+```
 
 ### Classification trees
 
@@ -692,6 +767,3 @@ audit[1551, ]
 # References
 
 https://rstudio-pubs-static.s3.amazonaws.com/202050_60f5c6dd1b884ba3ac29f1aef5c848bb.html
-
-
-
