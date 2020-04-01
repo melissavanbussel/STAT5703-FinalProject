@@ -247,6 +247,13 @@ which(audit$Employment == "Unemployed")
 
 Row 50 has an NA for __Occupation__ but it has "unemployed" for the __Employment__ variable. The NA for Occupation is a really a Not Applicable instead of a missing value.
 
+Also note that there is only one observation in the entire dataset for which the __Employment__ variable is "Volunteer". We will change this to "Unemployed". 
+
+```{r}
+(volunteer <- which(audit$Employment == "Volunteer"))
+audit$Employment[volunteer] <- "SelfEmp"
+```
+
 A few risk adjustments are negative.
 
 ```{r}
@@ -479,7 +486,7 @@ prop_correct_dev <- length(which(tree_dev_predict == test_audit_c$TARGET_Adjuste
 prop_correct_gini <- length(which(tree_gini_predict == test_audit_c$TARGET_Adjusted)) / ntest
 ```
 
-Using the proportion of correctly classified observations in the test set as a measure of model accuracy, the above models had accuracies on the test set of 86.5% and 83% respectively.
+Using the proportion of correctly classified observations in the test set as a measure of model accuracy, the above models had accuracies on the test set of 86.5% and 82.5% respectively.
 
 One problem with the plotting that we can see immediately is that the `tree` package does not plot categorical variables very well. Rather than displaying the names of categories, the plot displays a concatenation of letters corresponding to the positions of the level names. For example, the first split on the tree on the left is based on the `Marital` vlariable. The plot includes the letters "abdef" on this split, which actually means levels 1, 2, 4, 5 and 6 of the `Marital` variable (corresponding to the categories "Absent", "Divorced", "Married-spouse-absent", "Unmarried" and "Widowed"). 
 
@@ -761,8 +768,153 @@ plot(lmod2, which = 2)
 audit[1551, ]
 ```
 
+### MARS
 
+*Multivariate Adaptive Regression Splines*, commonly known as MARS, is a non-parametric way of modelling data using a series of piecewise linear regression models. 
 
+While the `mda` package in R offers a `mars` function to perform MARS, there is a 2019 package called `earth` which uses cross validation to find the optimal placements of knots across all provided predictor variables, and prunes accordingly. The function continues searching until the change in $R^2$ is less than a specified threshold. 
+
+This package also works well the `caret` package for further tuning of parameters. The main parameters that we wish to tune when using MARS are `degree` and `nprune`. The `degree` parameter controls the maximum degree of interaction terms that are allowed in the model, and the `nprune` parameter controls the maximum number of predictors that are allowed in the model. We will use the `caret` package to perform 10-fold cross validation to pick the best values for `degree` and `nprune`. The `caret` package recommends using RMSE (root mean squared error) as the selection criterion for parameter tuning when the response variable is continuous.  
+
+```{r}
+# Load packages for performing MARS and for tuning parameters
+library(earth)
+library(caret)
+
+# Keep only the observations that have no missing values 
+# since the `earth` function cannot handle missing values
+complete_train_audit_m <- train_audit_m[complete.cases(train_audit_m), ]
+
+# Create a parameter tuning "grid" 
+parameter_grid <- floor(expand.grid(degree = 1:4, nprune = seq(2, 50, by = 5)))
+
+# Set seed for reproducibility
+set.seed(2020)
+```
+
+```{r, eval = FALSE}
+# Perform cross-validation
+cv_mars_audit <- train(x = complete_train_audit_m[, 1:9], 
+                       y = complete_train_audit_m[, 10], 
+                       method = "earth",
+                       metric = "RMSE",
+                       trControl = trainControl(method = "cv", number = 10),
+                       tuneGrid = parameter_grid)
+# Save the results 
+save(cv_mars_audit, file = "cv_mars_audit.RDa")
+```
+
+```{r}
+# Load files 
+load("cv_mars_audit.RDa")
+
+# Visualize the results from the cross validation on the parameter tuning 
+ggplot(cv_mars_audit) + 
+  labs(x = "Value of nprune, the max # of predictors allowed", 
+       fill = "Value of degree, max degree of interaction allowed") +
+  ggtitle("Parameter Tuning for MARS")
+```
+
+We can see that the root mean squared error is minimized when `degree` is 1 and `nprune` is 2. For all values of these parameters, we can see that this quantity is very high. When we consider that the largest value of `RISK_Adjustment` in our training set (our response variable) is 99999, we see that this value of RMSE is extremely high and suggests that our model does not fit the training data very well. 
+
+```{r}
+# Remove observations with missing values from the test set 
+complete_test_audit_m <- test_audit_m[complete.cases(test_audit_m), ]
+
+# Use the best model to predict RISK_Adjustment for the test set 
+mars_predict <- predict(cv_mars_audit$finalModel, newdata = complete_test_audit_m)
+
+# Get the SSE 
+mars_sse <- sum((complete_test_audit_m$RISK_Adjustment - mars_predict)^2)
+
+# Get the mean absolute error 
+mars_mae <- mean(abs(complete_test_audit_m$RISK_Adjustment - mars_predict))
+```
+
+We can use our model to predict the response for the test set. Doing this, we obtain an SSE of roughly 30.8 billion, which is extremely high but is still lower than what we obtained with OLS. On average, this works out to an error of roughly $2800. 
+
+Below, we plot the residuals, and observe that the assumptions for linear regression are very clearly violated. In order for the MARS algorithm to be successful at modelling non-linear data, the data still must be linear enough in small sections that piecewise linear regression would be useful. This is **not** the case with our data, as evidenced by our residual plot.
+
+```{r}
+plot(complete_test_audit_m$RISK_Adjustment - mars_predict, 
+     main = "Residuals for MARS model", 
+     xlab = "Observation number in test set", 
+     ylab = "Residual")
+```
+
+### Regression Trees
+
+Regression trees are very similar to classification trees, with the exception that they aim to predict the value of a continuous variable rather than a binary variable. With regression trees, there are only specific values which may be predicted. These possible values are visible in the leaf nodes (bottom) of the tree.
+
+First, we use the `tree` package, trying both the `deviance` and `gini` options. The `deviance` option results in a tree with 5 leaf nodes, but the `gini` option results in a tree which has only has a root. This indicates that the data may not be well suited to regression trees. The tree below shows the regression tree obtained using the `deviance` option in the `tree` function: 
+
+```{r, message = FALSE}
+# Use deviance:
+# Note: mincut is the minimum number of observations per node
+reg_tree_dev <- tree(formula = RISK_Adjustment ~ ., data = train_audit_m,
+                     split = "deviance")
+
+# Use generalized gini
+reg_tree_gini <- tree(formula = RISK_Adjustment ~ ., data = train_audit_m,
+                      split = "gini")
+
+# Visualize the results 
+plot(reg_tree_dev)
+text(reg_tree_dev, all = TRUE)
+# The gini tree will not plot, as it is only a root 
+# plot(reg_tree_gini)
+# text(reg_tree_gini, all = TRUE)
+
+# Calculate prediction accuracy on the test set 
+reg_tree_dev_predict <- predict(reg_tree_dev, test_audit_m)
+reg_tree_gini_predict <- predict(reg_tree_gini, test_audit_m)
+reg_tree_dev_sse <- sum((test_audit_m$RISK_Adjustment - reg_tree_dev_predict)^2)
+reg_tree_gini_sse <- sum((test_audit_m$RISK_Adjustment - reg_tree_gini_predict)^2)
+```
+
+We can also use the `rpart` package to create regression trees. 
+
+```{r}
+# Create decision tree
+# Note: minsplit is the minimum number of observations per node
+reg_tree_rpart <- rpart(formula = RISK_Adjustment ~ ., data = train_audit_m)
+
+# Calculate prediction accuracy on the test set 
+reg_tree_rpart_predict <- predict(reg_tree_rpart, test_audit_m)
+reg_tree_rpart_sse <- sum((test_audit_m$RISK_Adjustment - reg_tree_rpart_predict)^2)
+
+# Plot the tree
+fancyRpartPlot(reg_tree_rpart, sub = "Regression tree created using the rpart package")
+```
+
+We can see that the `rpart` tree had 6 leaf nodes.
+
+For the `tree` package, the regression tree created using the `deviance` option had an SSE of approximately 30.8 billion when predicting the response variable on the test set, while it was 32.6 billion for the tree created using the `gini` option. This is not surprising to see a large difference between the two values, since we know that the second tree was simply predicting the same value regardless of the input. For the regression tree created using the `rpart` package, the SSE on the test set was ~32.7 billion. 
+
+The plot below shows the residuals for the regression tree created using the `tree` package with the `deviance` option.
+
+```{r}
+plot(test_audit_m$RISK_Adjustment - reg_tree_dev_predict, 
+     main = "Residuals for Regression Tree (Deviance)", 
+     xlab = "Observation number in test set", 
+     ylab = "Residual")
+```
+
+We can see that the residuals once again indicate that our model was not well suited to our data. 
+
+While we cannot visualize in as many dimensions as there are in our dataset, we can choose one variable in our dataset and plot it again the response variable for both the true values and the predicted values using the regression tree: 
+
+```{r}
+plot(test_audit_m$Age, test_audit_m$RISK_Adjustment, pch = 19,
+     main = "Regression Tree Predictions on Test Set (Using 'Deviance')", 
+     xlab = "Normalized Age",
+     ylab = "Risk Adjustment")
+points(test_audit_m$Age, reg_tree_dev_predict, pch = 19, col = "red")
+legend(legend = c("True", "Predicted"), col = c("Black", "Red"), pch = c(19, 19), 
+       x = "topleft")
+```
+
+From the plot, we can see that our regression tree is failing to predict high risk adjustments. It is also failing to predict any risk adjustments of exactly 0.
 
 # References
 
