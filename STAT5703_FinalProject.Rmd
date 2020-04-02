@@ -916,6 +916,97 @@ legend(legend = c("True", "Predicted"), col = c("Black", "Red"), pch = c(19, 19)
 
 From the plot, we can see that our regression tree is failing to predict high risk adjustments. It is also failing to predict any risk adjustments of exactly 0.
 
+### Zero-Inflated Regression
+
+*Zero-Inflated Regression* is a popular technique for predicting response variables that are over saturated with the value 0. With zero-inflated regression models, the assumption is made that the zeroes come from one distribution, while the non-zero values come from another distribution (this other distribution may also generate zeroes occasionally). Thus, zero-inflated regression "mixes" models together. 
+
+For count data, zero-inflated Poisson models are used frequently. A classic example of data coming from a zero-inflated Poisson distribution is the number of fish caught by visitors in a wildlife park. Many visitors may not fish at all, so there are many zeroes in the data. Some visitors may spend their entire visit fishing, and the distribution for the number of fish caught by these visitors will follow a Poisson distribution. 
+
+For the audit data, the response variable `RISK_Adjustment` can be thought of as a zero-inflated variable. This is because most of the individuals in the dataset do not have an adjustment made (resulting in many zeroes), but the adjustments that are non-zero follow some (unknown) distribution. We can create a histogram of the non-zero risk adjustments to understand the distribution a bit better: 
+
+```{r}
+x_vals <- seq(0, 30000, by = 1)
+nonzero_adjustments <- audit$RISK_Adjustment[which(audit$RISK_Adjustment > 0)]
+hist(nonzero_adjustments, probability = TRUE, 
+     main = "Histogram of Non-Zero Risk Adjustments",
+     xlab = "Value")
+```
+
+The data look like they could be Poisson, but there are a handful of outliers. For zero-inflated count data where the variance is much larger than the mean, it is common to use zero-inflated negative binomial regression. The `pscl` package in R will allow us to perform these two types of zero-inflated regression. Since the variance of our non-zero risk adjustments is larger than the mean of our non-zero risk adjustments, we expect that the Poisson will not perform as well as the other option. 
+
+Note that since there are a few risk adjustments which are negative and the above distributions are positive, we will temporarily assign negative adjustments to the value 0. We will also only use observations without any missing values, as this is required by the `zeroinfl` function. The results from the zero-inflated regression are shown in the table below: 
+
+```{r}
+# Load library for performing zero-inflated regression
+library(pscl)
+
+# If response is less than 0, assign to zero temporarily 
+pos_train_audit <- complete_train_audit_m
+pos_test_audit <- complete_test_audit_m 
+pos_train_audit$RISK_Adjustment <- ifelse(pos_train_audit$RISK_Adjustment < 0, 
+                                           0, pos_train_audit$RISK_Adjustment)
+pos_test_audit$RISK_Adjustment <- ifelse(pos_test_audit$RISK_Adjustment < 0, 
+                                           0, pos_test_audit$RISK_Adjustment)
+
+
+# Perform zero-inflated poisson regression (ZIP)
+zip <- zeroinfl(formula = RISK_Adjustment ~ ., data = pos_train_audit, dist = "poisson")
+zip_predict <- predict(zip, newdata = pos_test_audit)
+zip_sse <- sum((complete_test_audit_m$RISK_Adjustment - zip_predict)^2)
+zip_mae <- mean(abs(complete_test_audit_m$RISK_Adjustment - zip_predict))
+
+# Perform zero-inflated negative binomial regression
+zi_negbin <- zeroinfl(formula = RISK_Adjustment ~ ., data = pos_train_audit, dist = "negbin")
+zi_negbin_predict <- predict(zi_negbin, newdata = pos_test_audit)
+zi_negbin_sse <- sum((complete_test_audit_m$RISK_Adjustment - zi_negbin_predict)^2)
+zi_negbin_mae <- mean(abs(complete_test_audit_m$RISK_Adjustment - zi_negbin_predict))
+
+# Combine results into a single data frame
+results <- data.frame(SSE = c(zip_sse, zi_negbin_sse), 
+                      MAE = c(zip_mae, zi_negbin_mae))
+row.names(results) <- c("Zero-Inflated Poisson", 
+                    "Zero-Inflated Negative Binomial")
+
+# Display results
+kable(results) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+We can see that the negative binomial performed better than the Poisson, as expected.
+
+We can also compare our above results to results obtained using standard GLMs with the same distributions (i.e., not using zero-inflated models) for comparison: 
+
+```{r}
+# Load library for performing negative binomial regression
+library(MASS)
+
+# Poisson regression
+pois_glm <- glm(formula = RISK_Adjustment ~ ., data = pos_train_audit, 
+                family = "poisson", na.action = "na.omit")
+pois_glm_predict <- predict(pois_glm, newdata = pos_test_audit)
+pois_glm_sse <- sum((complete_test_audit_m$RISK_Adjustment - pois_glm_predict)^2)
+pois_glm_mae <- mean(abs(complete_test_audit_m$RISK_Adjustment - pois_glm_predict))
+
+# Negative binomial regression
+negbin_glm <- glm.nb(formula = RISK_Adjustment ~ ., data = pos_train_audit, 
+                     na.action = "na.omit")
+negbin_glm_predict <- predict(negbin_glm, newdata = pos_test_audit)
+negbin_glm_sse <- sum((complete_test_audit_m$RISK_Adjustment - negbin_glm_predict)^2)
+negbin_glm_mae <- mean(abs(complete_test_audit_m$RISK_Adjustment - negbin_glm_predict))
+
+# Combine results into a single data frame
+results <- data.frame(SSE = c(pois_glm_sse, negbin_glm_sse), 
+                      MAE = c(pois_glm_mae, negbin_glm_mae))
+row.names(results) <- c("Poisson GLM", 
+                    "Negative Binomial GLM")
+
+# Display results
+kable(results) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+We can see that, in both cases, the zero-inflated models resulted in much smaller values for the SSE. The mean absolute errors were lower with the standard GLMs. 
+
 # References
 
 https://rstudio-pubs-static.s3.amazonaws.com/202050_60f5c6dd1b884ba3ac29f1aef5c848bb.html
