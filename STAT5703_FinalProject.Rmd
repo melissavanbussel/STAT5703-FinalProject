@@ -1,20 +1,24 @@
 ---
-title: "Final Project - Audit Data"
-author: "Olivier Chabot"
-date: "24/03/2020"
+title: "STAT 5703 Final Project"
+author: "Olivier Chabot, Richard Matzinger, Melissa Van Bussel"
+date: "Due: April 7th, 2020"
 output:
-    pdf_document:
-    toc: true
-theme: united
+   pdf_document:
+      fig_caption: true
+      number_sections: true
 ---
 
+\newpage 
+\tableofcontents 
+\newpage
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 ```
 
 # Statement of Problem
 
-Our audit dataset contains characteristics of 2000 individual tax returns. The objective is to predict the binary (TARGET_Adjusted) and continuous (RISK_Adjustment) target variables. The variables are:
+Our audit dataset contains characteristics of 2000 individual tax returns. The objective is to predict the binary (`TARGET_Adjusted`) and continuous (`RISK_Adjustment`) target variables. The variables are:
 
 * __ID__ (Unique identifier for each person)
 
@@ -28,7 +32,7 @@ Our audit dataset contains characteristics of 2000 individual tax returns. The o
 
 * __Occupation__ (Type of occupation)
 
-* __Outcome__ (Amount of income declared)
+* __Income__ (Amount of income declared)
 
 * __Gender__ (Gender of person)
 
@@ -36,58 +40,78 @@ Our audit dataset contains characteristics of 2000 individual tax returns. The o
 
 * __Hours__ (Average hours worked on a weekly basis)
 
-* __Risk_Adjustment__ (The continuous target variable; this variable records the monetary amount of any adjustment to the person’s financial stuatus as a result of a productive audit.  This variable is a measure of the size of the risk associated with the person)
+* __RISK_Adjustment__ (The continuous target variable; this variable records the monetary amount of any adjustment to the person's financial status as a result of a productive audit.  This variable is a measure of the size of the risk associated with the person)
 
-* __TARGET_Adjusted__ (The binary target variable for classification modeling (0/1), indicating nonproductive and productive audits, respectively. Productive audits are those that result in an adjustment being made to a client’s financial statement.) 
+* __TARGET_Adjusted__ (The binary target variable for classification modeling (0/1), indicating nonproductive and productive audits, respectively. Productive audits are those that result in an adjustment being made to a client’s financial statement)
+
+\newpage
 
 # Data Exploration & Visualization
 
+Before we begin manipulating our data, we will perform exploratory data analysis to get a sense for the structure of the data we are working with.
+
+First, we use the `skimr` package to see the variables and their data types: 
+
 ```{r}
-
-# Loading the data set
-
+# Load the data set
 audit <- read.csv("audit.csv")
 
 # Loading libraries
-
 library(ggplot2) # For basics graphs
-
 library(GGally) # For scatter plot matrix
-
 library(dplyr) # To manipulate and explore data
+library(skimr) # To skim the structure of the dataset
 
+# Convert the binary response variable to a factor variable
+audit$TARGET_Adjusted <- as.factor(audit$TARGET_Adjusted)
 
 # Looking at the structure of our data
-
-glimpse(audit)
-
+skim_without_charts(audit)
 ```
 
-Note that "Absent" is a possible answer for marrital status. According to https://www.census.gov/prod/2003pubs/c2kbr-30.pdf:
+We see that we have 6 categorical and 6 numeric variables. The numeric variables are on very different scales, indicating that normalization of the data will be necessary for modeling. We can also see a couple of class imbalances. With our binary response variable, only 463 out of 2000 individuals (or roughly 23%) resulted in productive audits. Additionally, significantly more males than females were sampled. The average income in our dataset is quite high, despite the fact that the minimum income is $610, suggesting that there may be influential outliers. We also notice that most people have low deductions, if any. 
 
-"Marital status: The marital status classification refers to the status
-on the census date, April 1, 2000. The “now married” category
-includes those who were “married, spouse present” and those who
-were “married, spouse absent.” These latter two subcategories were
-determined in the processing and editing steps by the presence or
-absence of a spouse in the household as ascertained from the relationship-to-householder question on the long form and the assignment of people to related subfamilies. “Married, spouse present”
-applies to husbands and wives if both were living in the same household. “Married, spouse absent” applies to husbands and wives who
-answered that they were “Now married” on the census form but no
-spouse could be found who could be linked to them in the editing
-stages. Since people in group quarters housing (for example, institutions or shelters) were not asked the relationship item, all people in
-group quarters housing who reported that they were “Now married”
-were subsequently assigned to the “Married, spouse absent” category
-in the recoding steps. "
+The only variables with missing values are `Employment` and `Occupation`, with roughly 5% missingness. Note that __Employment__ has 100 `NA`s while __Occupation__ has 101 `NA`s. 
 
-Thus, absent would be someone who is married but living away (in a nursing home). Married but spouse absent would be a person who is married their their spouse is living somewhere else.
+```{r, eval = FALSE}
+which(is.na(audit$Employment) != is.na(audit$Occupation))
+which(audit$Employment == "Unemployed")
+```
 
-The unique identifier variable is irrevelant to our analysis. Employment, Occupation, Marital are all nominal categorical variables with lots of levels and thus can be ignored for the scatterplot matrix. Education however can be considered as an ordinal variable.
+Row 50 has a missing value for the __Occupation__ variable but it has "Unemployed" for the __Employment__ variable. Therefore, the `NA` for Occupation should really be considered as "Not Applicable" rather than a missing value.
 
 ```{r}
-
-levels(audit$Education)
-
+unemployed <- which(audit$Employment == "Unemployed")
+audit$Employment[unemployed] <- "Not Applicable"
 ```
+
+Also note that there is only one observation in the entire dataset for which the __Employment__ variable is "Volunteer". We will change this to "SelfEmp", since this person does have an income.
+
+```{r}
+volunteer <- which(audit$Employment == "Volunteer")
+audit$Employment[volunteer] <- "SelfEmp"
+audit$Employment <- droplevels(audit$Employment) # drop unused levels (Volunteer)
+```
+
+A few of the risk adjustments are negative: 
+
+```{r}
+results <- audit[which(audit$RISK_Adjustment < 0), -c(1, 2, 5, 8)]
+row.names(results) <- NULL 
+
+# Load package for displaying tables 
+library(kableExtra)
+
+# Display table 
+kable(results) %>% 
+  kable_styling(latex_options = "striped")
+```
+
+Perhaps negative adjustments reflect individuals who over-reported their income and thus paid more taxes than they were supposed to.
+
+We note that "Absent" is a valid marital status. According to the United States Census Bureau [@census], "absent" refers to someone who is married but living away (e.g., in a nursing home). Similarly, "Married-spouse-absent" refers to a person who is married but whose spouse is living somewhere else.
+
+We also see that the unique identifier variable is irrelevant to our analysis. `Employment`, `Occupation`, `Marital`, and `Gender` are all nominal categorical variables with many levels. `Education`, however, could be treated as an ordinal variable.
 
 We might assign values to each education level according to the following hierarchy:
 
@@ -119,202 +143,284 @@ We might assign values to each education level according to the following hierar
 
 * Preschool (0)
 
-
 ```{r}
-# Ordinal Education
-
+# Converting the education levels to their numeric rank
 edu_levels <- as.character(levels(audit$Education))
 edu_rank <- c(10, 11, 9, 13, 8, 12, 0, 12, 9, 5, 6, 7, 1, 2, 3, 4)
 
-audit$Education <- as.character(audit$Education)
+# Create a separate dataframe with ordinal educational ranks
+audit_edu <- audit
+audit_edu$Education <- as.character(audit_edu$Education)
 
-class(audit$Education)
-
-for (i in 1:16){
-
-  for (j in 1:2000){
-    if (audit[j, 4] == edu_levels[i]){
-      audit[j, 4] <- edu_rank[i]
+# Convert the education levels to numerical ranks 
+for (j in 1:2000) {
+  for (i in 1:16) {
+    if (audit_edu[j, 4] == edu_levels[i]) {
+      audit_edu[j, 4] <- edu_rank[i]
     }
-
   }
-
 }
-
-head(audit, n = 10)[ , 1:8]
-
-audit$Education <- as.factor(audit$Education)
-
-class(audit$Education)
+audit_edu$Education <- as.integer(audit_edu$Education)
 ```
 
-We can use a scatterplot matrix to get an overview of our reduced data.
+We can use a scatterplot matrix to get an overview of our new data. We will exclude the categorical variables from this visualization.
 
 ```{r}
-
- 
-# Scatterplot matrix
-
-# base r
-
-pairs(audit[ , -c(1, 3, 5, 6)], col = audit$TARGET_Adjusted + 4)
-
-```
-
-Some clusters seem to be present(Age, Deductions)|(Income, deduction)|(education hours)|(Hours, deductions)
-
-```{r, eval = FALSE}
-# ggplot version
-
-audit$TARGET_Adjusted <- as.factor(audit$TARGET_Adjusted)
-
-# Check correlations (as scatterplots), distribution and print corrleation coefficient
-ggpairs(audit[ , -c(1, 3, 5, 6)], ggplot2::aes(colour = audit$TARGET_Adjusted), 
-        title="correlogram with ggpairs()")
-```
-
-
-
-
-```{r}
-# Class version
+# Load Dr. Mills' code for the version we learned in class
 source("pairs_ext.r")
 
-pairs(audit[ , -c(1, 3, 5, 6)], upper.panel = panel.cor, diag.panel = panel.hist)
-
-audit <- read.csv("audit.csv")
+# Create scatterplot matrices 
+pairs(audit_edu[ , -c(1, 3, 5, 6)], col = as.numeric(audit_edu$TARGET_Adjusted) + 4)
+pairs(audit_edu[ , -c(1, 3, 5, 6)], upper.panel = panel.cor, diag.panel = panel.hist)
 ```
 
-The average number of hours worked on a weekly basis looks weird as well. Let's take a look at it.
+```{r, eval = FALSE, warning = FALSE, message = FALSE}
+# Scatterplot matrix using ggplot
+ggpairs(audit_edu[, -c(1, 3, 5, 6)],
+        cardinality_threshold = 20,
+        ggplot2::aes(colour = audit_edu$TARGET_Adjusted),
+        title = "Augmented Scatterplot Matrix of Audit Data") +
+  theme(axis.text = element_text(size = 6, angle = 45))
+```
+
+Some rough clusters seem to be present between `Age` and `Deductions`, `Income` and `Deductions`, `Education` and `Hours`, `Hours` and `Deductions`. The light blue dots represent the cases with a productive audit.
+
+Next, we create a ridgeline density plot to examine the distribution of the `Income` variable across the various education levels.
 
 ```{r}
+# Load packages for creating ridgeline density plots
+library(ggridges)
+library(viridis)
+
+# Create ridgeline density plot
+ggplot(audit_edu,
+       aes(x = Income, y = as.factor(Education),
+           group = as.factor(Education), fill = ..x..)) +
+  geom_density_ridges_gradient(rel_min_height = 0.01) +
+  scale_fill_viridis(option = "plasma") +
+  scale_x_continuous(name = "Income", labels = scales::comma) +
+  labs(x = "Income", y = "Education Level") +
+  theme(legend.position = "none")
+```
+
+The distribution of income seems to be skewed right with similar values for highest density across all levels of education. Surprisingly, the highest density income seems to decrease with increased levels of education after "High School Graduate". Perhaps there is some truth to the saying "you peaked in high school", or perhaps something else is going on. It is very odd that those with a "Preschool" level of education are making such high incomes. This certainly raises a red flag and may suggest that some of the data has either been miscoded, tampered with, or is just highly unusual. 
+
+Next, we explore the distribution of the `Age` and `Income` variables, grouped by audit status (productive or nonproductive). 
+
+```{r}
+# Create function to plot grouped histograms with overlayed densities and mean
 plot_multi_histogram <- function(df, feature, label_column) {
-    plt <- ggplot(df, aes(x=eval(parse(text=feature)), fill=eval(parse(text=label_column)))) +
-    geom_histogram(alpha=0.7, position="identity", aes(y = ..density..), color="black") +
-    geom_density(alpha=0.7) +
-    geom_vline(aes(xintercept=mean(eval(parse(text=feature)))), color="black", linetype="dashed", size=1) +
-    labs(x=feature, y = "Density")
-    plt + guides(fill=guide_legend(title=label_column))
+    plt <- ggplot(df, aes(x = eval(parse(text = feature)), 
+                          fill = eval(parse(text = label_column)))) +
+    geom_histogram(alpha = 0.4, position = "identity", 
+                   aes(y = ..density..), color = "black") +
+    geom_density(alpha = 0.4) +
+    geom_vline(aes(xintercept = mean(eval(parse(text = feature)))), 
+               color = "black", linetype = "dashed", size = 1) +
+    labs(x = feature, y = "Density")
+    plt + guides(fill = guide_legend(title = label_column))
 }
 
-audit$TARGET_Adjusted <-as.factor(audit$TARGET_Adjusted)
-class(audit$TARGET_Adjusted)
+# Load package for creating a grid of ggplots 
+library(gridExtra)
 
-plot_multi_histogram(audit, 'Hours','TARGET_Adjusted')
-
+# Create grouped histograms for the Age and Income variables
+p1 <- plot_multi_histogram(audit_edu, "Income", "TARGET_Adjusted") + 
+  theme(legend.position = "none")
+p2 <- plot_multi_histogram(audit_edu, "Age", "TARGET_Adjusted") +
+  labs(y = "")
+grid.arrange(p1, p2, nrow = 1, widths = c(0.45, 0.55))
 ```
+
+The plot on the left suggests that most individuals who resulted in productive audits had reported a low-to-average income. This could be another red flag, since we might expect that those with higher incomes are more likely to commit tax fraud. It is possible, though, that individuals with lower incomes are more likely to under report income in order to access social programs. The plot on the right suggests that more older individuals result in productive audits. 
+
+Below, we visualize the relationship between annual income and the average number of hours worked per week, grouped by audit status. 
 
 ```{r}
-
-# Boxplot of Hours
-
-ggplot(data = audit, aes(y = audit$Hours)) +
-  geom_boxplot()
-
-# Relationship between outlier hours and income?
-
-ggplot(data = audit, aes(x = audit$Hours, y = audit$Income)) +
-  geom_point() + 
-  scale_x_continuous(name="Hours") +
-  scale_y_continuous(name="Income",
-                     labels = scales::comma)
+# Plot relationship between annual income and average number of hours worked
+ggplot(data = audit, aes(x = Hours, y = Income,
+                         colour = TARGET_Adjusted)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  ggtitle("Relationship between income and hours worked") +
+  scale_x_continuous(name = "Hours") +
+  scale_y_continuous(name = "Income", labels = scales::comma)
 ```
 
-100 hour work-week is not impossible dig deeper into those cases. Maybe mistakes. We care more about the people who work __long hours__ and __do not__ report a high income. 
+It is odd that annual income is negatively correlated with the average number of hours worked, though this correlation is very weak. In the bottom right of the plot, we notice that many people who work __above average hours__ and __do not__ report a high income are often productive audits. 
+
+Now we will take a closer look at the risk adjustment variable. In the plot below, we examine the relationship between `RISK_Adjustment` and `Income` for the productive audits. We colour the points pink for females and blue for males, and set the size of the points proportional to the average number of hours worked per week. Additionally, we identify any individuals which have an income of less than $30,000 but who work more than 60 hours per week (the black points on the plot). Finally, we add a dashed line at `RISK_Adjustment = 99999`, showing that this is a popular value in the dataset. There is only one risk adjustment which is above this value, which makes us question whether this point is simply an outlier or if the value was miscoded by mistake. 
 
 ```{r}
-audit <- read.csv("audit.csv")
+# Create data frame containing the non-zero risk adjustments 
+nonzero_adj <- audit[which(audit$RISK_Adjustment > 0), ]
 
-audit[which((audit$Hours > 60) & (audit$Income < 30000)), -c(1, 2, 5, 8)]
+# Plot the relationship between 
+ggplot(data = nonzero_adj, 
+       aes(x = Income, y = RISK_Adjustment, size = Hours, colour = Gender)) +
+  geom_point(alpha = 0.25) +
+  annotate(geom = "point", x = c(17863.06, 26138.85), y = c(99999, 5672), 
+           size = 4) +
+  # Create a nicer income scale
+  scale_x_continuous(name = "Income", labels = scales::comma) +
+  # Add horizontal line at $99 999
+  geom_hline(yintercept = 99999, linetype = "dashed", colour = I("darkgrey")) +
+  # Label individuals that work over 60 hours and report < $30 000 of income
+  geom_label(data = nonzero_adj %>% filter(Hours > 60 & Income < 30000), 
+             aes(label = paste0("Income = $", Income), 
+                 size = 12), 
+             x = c(37000, 37000), y = c(15000, 90000), 
+             show.legend = FALSE, colour = "black") + 
+  # Label individuals that have a risk adjustment > $99 999
+  geom_label(data = nonzero_adj %>% filter(RISK_Adjustment > 99999), 
+             aes(label = "Outlier, or possible miscode?", size = 12), 
+             x = 110000, y = 112000, show.legend = FALSE) + 
+  ggtitle("Relationship between RISK_Adjustment and Income for Productive Audits")
 ```
 
-A risk adjustment of 99 999$ is suspicious. Perhaps an error?
-
-
-We can take a look at the summary of our data to d
-```{r}
-# Looking for outliers
-
-summary(audit)
-```
-
-Note that __Employment__ has 100 NA's while __Occupation__ has 101 NA's. 
-
-```{r}
-which(is.na(audit$Employment) != is.na(audit$Occupation))
-which(audit$Employment == "Unemployed")
-```
-
-Row 50 has an NA for __Occupation__ but it has "unemployed" for the __Employment__ variable. The NA for Occupation is a really a Not Applicable instead of a missing value.
-
-Also note that there is only one observation in the entire dataset for which the __Employment__ variable is "Volunteer". We will change this to "Unemployed". 
-
-```{r}
-(volunteer <- which(audit$Employment == "Volunteer"))
-audit$Employment[volunteer] <- "SelfEmp"
-```
-
-A few risk adjustments are negative.
+In the next visualization, we will explore the relationship between annual income and hourly wage. While we are not provided directly with each individual's hourly wage, we are given the average number of hours worked per week. We will make the assumption that each person works for 50 weeks per year. In the plot below, we group by audit status (productive is blue, nonproductive is pink) and identify large hourly wages.
 
 ```{r}
-which(audit$RISK_Adjustment < 0)
+# Compute the "hourly wage" of individuals, assuming they work 50 weeks/year
+audit_hourly_wage <- audit_edu %>% 
+  mutate(Hourly_Wage = Income / ( 50 * Hours))
 
-audit[which(audit$RISK_Adjustment < 0), -c(1, 2, 5, 8)]
+# Plot income vs. hourly wage, grouped by audit status
+ggplot(audit_hourly_wage, 
+       aes(x = Hourly_Wage, y = Income, colour = TARGET_Adjusted)) +
+  geom_point() +
+  # Add a vertical line for incomes above $1000
+  geom_vline(xintercept = 1000, linetype = "dashed", colour = I("darkgrey")) +
+  # Label points over an hourly wage of $1500
+  geom_label(data = audit_hourly_wage %>% filter(Hourly_Wage > 1500), 
+             aes(label = paste0("Hourly wage = $", Hourly_Wage)),
+             x = 2000, y = 1e5, show.legend = FALSE) + 
+  scale_x_continuous(name = "Hourly Wage", labels = scales::comma) +
+  scale_y_continuous(name = "Income", labels = scales::comma) +
+  ggtitle("Relationship between Income and Hourly Wage")
 ```
 
-Nothing suspicious here. Let's look at the risk adjustment variable.
+We see that there is a clear relationship between annual income and hourly wage, with a handful outliers. 
 
+We now dig deeper into the hourly wages, grouping by occupation and audit status.
 
 ```{r}
-
-which(audit$RISK_Adjustment > 50000)
-
-reduced_audit <- audit[which(audit$RISK_Adjustment > 50000), ]
-
-audit[which(audit$RISK_Adjustment > 50000), -c(1, 2, 5, 8)]
-
-ggplot(data = reduced_audit, aes(x = reduced_audit$Income,
-                                 y = reduced_audit$RISK_Adjustment,
-                                 size = reduced_audit$Hours,
-                                 colour = reduced_audit$Education)) +
-  geom_point()
+# Visualize hourly wages, grouped by occupation and audit status
+ggplot(audit_hourly_wage, aes(x = Occupation, y = Hourly_Wage,
+                     colour = TARGET_Adjusted,
+                     size = RISK_Adjustment)) +
+  geom_point(alpha = 0.5) +
+  # Add horizontal line at $1000
+  geom_hline(yintercept = 1000, linetype = "dashed", color = I("darkgrey")) +
+  # Label the x-axis vertically
+  theme(axis.text.x = element_text(angle = 90)) +
+  # Label points over an hourly wage $1500
+  geom_label(data = audit_hourly_wage %>% filter(Hourly_Wage > 1500), 
+             aes(label = paste0("Hourly wage = $", Hourly_Wage)),
+             x = 11.75, y = 2500, show.legend = FALSE, size = 4) + 
+  scale_y_continuous(name = "Hourly Wage", labels = scales::comma) +
+  ggtitle("Hourly Wage, Grouped by Occupation and Audit Status")
 ```
 
-There a many adjustments of 99 999. Let's investigate further...
-
-### Normalizing the data
-
-```{r}
-f.data.std <- function(data) {
-data <- as.matrix(data) 
-bar <- apply(data, 2, mean) 
-s <- apply(data, 2, sd) 
-t((t(data) - bar)/s)
-}
-```
-
-```{r}
-Age_N <- f.data.std(audit$Age)
-Income_N <- f.data.std(audit$Income)
-Deductions_N <- f.data.std(audit$Deductions)
-Hours_N <- f.data.std(audit$Hours)
-Risk_N <- f.data.std(audit$RISK_Adjustment)
-audit_N <- cbind(audit, Age_N, Income_N, Deductions_N, Hours_N, Risk_N)
-
-head(audit_N, n = 10)
-```
-
-
-
-
+We see that 2 of the largest hourly wages have missing values for their occupations. One observation that stands out as a possible error is the individual who makes $1372 per hour, but whose occupation is "clerical". Additionally, we see that some of the largest risk adjustments are for those who have low hourly wages.
 
 # Dimension Reduction
+
+## PCA
+
+To perform dimension reduction, we first perform principal components analysis. For this method, we can only use numeric variables. While we could convert categorical variables to numeric variables, it doesn't make sense to do so for PCA. This is because PCA relies on distances between vectors, and the distance between categorical variables is unclear.
+
+We use the `prcomp` function, setting arguments `center` and `scale` to `TRUE` in order to normalize our data first.
+
+The scree plot below shows the relative importance of each of the principal components by displaying the variance explained by each PC. 
+
+```{r}
+# Exclude all categorical variables, the response variable, and the ID variables.
+audit_pca <- prcomp(audit[, c(2, 7, 9, 10)], center = TRUE, scale = TRUE)
+
+plot(audit_pca, col = heat.colors(4),
+     xlab = "Principal Component",
+     main = "PCA on the Standardized Numerical Variables")
+```
+
+It is also useful to visualize the cumulative proportion of variation explained by each PC: 
+
+```{r}
+# How many principal components should we retain?
+pr_var <- (audit_pca$sdev)^2
+
+# Proportion of variance explained
+pr_var_exp <- pr_var / sum(pr_var)
+
+# Cumulative proportion of variance plot
+barplot(cumsum(pr_var_exp), xlab = "PC #", ylab = "Proportion of explained variance", 
+     main = "Cumulative proportion of variance plot", col = heat.colors(4),
+     names.arg = 1:4)
+```
+
+The plot tells us that it would not be wise to remove any of our numeric variables (or to use a subset of the principal components), as removing even one PC will result in a drop of ~20% for the explained variance. Thus, we will need to explore other methods of dimension reduction (ones that will consider our categorical variables as well). 
+
+In order to gain some insight from the PCs, we can create a "biplot", which will allow us to visualize the observations and direction vectors of multivariate data. In the plot below, the direction vectors which are longest in the x-direction correspond to the variables that are represented more heavily in the first PC, while direction vectors which are longest in the y-direction correspond to the variables that are represented more heavily in the second PC. 
+
+```{r}
+# Plot each variable vector components for the first 2 PCs
+biplot(audit_pca, sub = "Biplot of first 2 principal components", scale = 0)
+```
+
+We can see from the biplot that the first principal component corresponds most to `Income` and `Age`. Similarly, the second principal component corresponds most to `Hours` and `Deductions`. We can confirm our results by looking at the rotation matrix: 
+
+```{r}
+# Display rotation matrix 
+kable(audit_pca$rotation) %>% 
+  kable_styling(latex_options = "striped")
+```
 
 # Data Reduction
 
 # Unsupervised Learning - Clustering
 
-# Supervised Learning - Classification and Modelling 
+## Clustering
+
+## Self-organizing maps
+
+Self-organizing maps is a method of unsupervised learning. It is described as being akin to k-means clustering, but as a type of dimension reduction, rather than data reduction. 
+
+```{r, eval = FALSE}
+# Self-Orgnizing Map    __________________________________________________
+
+# som package used in class notes
+install.packages("som")
+library(som)
+
+set.seed(007)
+
+# run som function using normalized data
+som_aud_s <- som::som(audit_N[,13:17], xdim=5, ydim=5, topol="hexa", init="linear")
+plot(som_aud)
+```
+Honestly, I have no idea how to interpret this plot. It's just the only generic function from her notes that she didn't write, everything else seemed like pedagogical gibberish. 
+
+The kohonen package is also popular for creating self-organizing maps. 
+```{r, eval = FALSE}
+# kohonen package, popular for SOMs
+install.packages("kohonen")
+library(kohonen)
+
+g <- kohonen::somgrid(xdim = 5, ydim = 5, topo = "rectangular")
+map <- kohonen::som(X = as.matrix(audit_N[,13:17]), grid = g)
+plot(map, type = 'changes') # probably won't use this
+```
+This first plot is sort of a diagnostic showing how many interations were performed. Probably don't care about this but it's interesting to see. 
+```{r, eval = FALSE}
+plot(map, main = "5x5 code plot of numeric variables in audit data")
+```
+This code plot shows clusters of different levels of the numeric variables in our dataset, with larger pieces indicating higher levels of a given variable. With respect to the risk adjustment variable, we see one node where moderate amounts of risk adjustment are associated with lower ages and deductions. 
+```{r, eval = FALSE}
+plot(map, type = 'count') 
+```
+This plot shows the counts of cases in each node. Maybe this could be displayed next to the code plot. Don't really know what to say about this, I think it really just illustrates how the individual cases are mapped to each node. 
+
+# Supervised Learning - Classification and Modelling
 
 ## Set-Up: Training and Test Set
 
@@ -334,6 +440,14 @@ train_indices <- sample(1:n, size = ntrain, replace = FALSE)
 train_audit <- audit[train_indices, ]
 test_audit <- audit[-train_indices, ]
 
+# Normalization function
+f.data.std <- function(data) {
+data <- as.matrix(data) 
+bar <- apply(data, 2, mean) 
+s <- apply(data, 2, sd) 
+t((t(data) - bar)/s)
+}
+
 # Normalize numeric predictor variables, separately between training and test sets
 train_audit$Age <- f.data.std(train_audit$Age)
 train_audit$Income <- f.data.std(train_audit$Income)
@@ -344,15 +458,12 @@ test_audit$Income <- f.data.std(test_audit$Income)
 test_audit$Deductions <- f.data.std(test_audit$Deductions)
 test_audit$Hours <- f.data.std(test_audit$Hours)
 
-# Convert classification variable to a factor variable 
-train_audit$TARGET_Adjusted <- as.factor(train_audit$TARGET_Adjusted)
-test_audit$TARGET_Adjusted <- as.factor(test_audit$TARGET_Adjusted)
-
-# Create dataframe to be used for modelling the RISK_Adjustment variable
+# Create data frame to be used for modeling the RISK_Adjustment variable
 # Remove ID variable, and TARGET_Adjusted variable
 train_audit_m <- train_audit[, -c(1, 12)]
 test_audit_m <- test_audit[, -c(1, 12)]
-# Create dataframe to be used for classifying the TARGET_Adjusted variable
+
+# Create data frame to be used for classifying the TARGET_Adjusted variable
 # Remove the ID variable, and RISK_Adjustment variable
 train_audit_c <- train_audit[, -c(1, 11)]
 test_audit_c <- test_audit[, -c(1, 11)]
@@ -375,9 +486,102 @@ The distributions look approximately equal, and we can proceed.
 
 ## Classification 
 
+In this section, we will use a variety of methods to predict the binary variable `TARGET_Adjusted` for the test set, using the training set to develop and validate models. 
+
+### Generalized Linear Models / Logistic Regression
+
+We begin our classification with logistic regression. We will start with a very simple model that uses `Gender` to predict audit status, noting that a higher proportion of males resulted in productive audits for our training set: 
+
+```{r}
+# Examine the proportion of males vs. females that resulted in productive audits
+prop.table(table(train_audit_c$TARGET_Adjusted, train_audit_c$Gender))
+
+# Create GLM to predict TARGET_Adjusted using Gender as the predictor
+glmod1 <- glm(TARGET_Adjusted ~ Gender, data = train_audit_c, family = "binomial")
+
+# Calculate prediction accuracy on the test set 
+glmod1_predict <- round(predict(glmod1, newdata = test_audit_c, type = "response"), 0)
+prop_correct_glmod1 <- sum(glmod1_predict == test_audit_c$TARGET_Adjusted) / ntest
+```
+
+This simple model classified every single observation in the test set as a 0 (nonproductive audit), with the largest probability of productive audit being assigned 0.28. Since there are only 93 productive audits in the test set of 400 observations, it's not surprising that the classification accuracy was 307/400 = 76.75%. 
+
+Below, we plot the predicted probabilities of being a productive audit (for the training data). The dashed lines represent the null probabilities (using the table of proportions from the training set, shown earlier). 
+
+```{r}
+# Create data frame containing the predicted probabilities and Gender
+predicted_data <- data.frame(
+  probability_of_prod = glmod1$fitted.values,
+  Gender = train_audit_c$Gender)
+ 
+# Plot the predictions 
+ggplot(data = predicted_data, aes(x = Gender, y = probability_of_prod)) +
+  geom_point(aes(color = Gender), size = 5) +
+  xlab("Gender") +
+  ylab("Predicted probability of being a productive audit") +
+  geom_hline(yintercept = 313 / (313 + 798), linetype = "dashed", color = "#00BFC4") +
+  geom_hline(yintercept = 57 / (57 + 432), linetype = "dashed", color = "#F8766D")
+```
+
+Therefore, the model is simply predicting the conditional probabilities from the training data.
+ 
+```{r}
+## Now calculate the overall "Pseudo R-squared" and its p-value
+ll_null <- glmod1$null.deviance / (-2)
+ll_proposed <- glmod1$deviance/ (-2)
+ 
+## McFadden's Pseudo R^2 = [ LL(Null) - LL(Proposed) ] / LL(Null)
+(ll_null - ll_proposed) / ll_null
+ 
+## The p-value for the R^2
+1 - pchisq(2 * (ll_proposed - ll_null), df = (length(glmod1$coefficients) - 1))
+```
+
+Next, we will fit the full model (using all available predictor variables). Note that in order to do this, we will need to deal with the missing values. Since our missing values are only for the categorical variables and since we did not discuss in class how to interpolate categorical variables, we will simply remove these observations when training any models which cannot handle missing values. 
+
+```{r}
+# Keep only the observations without missing values
+complete_train_audit_c <- train_audit_c[complete.cases(train_audit_c), ]
+complete_test_audit_c <- test_audit_c[complete.cases(test_audit_c), ]
+complete_train_audit_m <- train_audit_m[complete.cases(train_audit_m), ]
+complete_test_audit_m <- test_audit_m[complete.cases(test_audit_m), ]
+
+# Compute the number of observations that had no missing values
+ntrain_complete <- nrow(complete_train_audit_c)
+ntest_complete <- nrow(complete_test_audit_c)
+
+# Create GLM using all predictor variables
+glmod2 <- glm(TARGET_Adjusted ~ ., data = complete_train_audit_c, family = "binomial")
+
+# Calculate prediction accuracy on the test set 
+glmod2_predict <- round(predict(glmod2, newdata = complete_test_audit_c, type = "response"), 0)
+prop_correct_glmod2 <- sum(glmod2_predict == complete_test_audit_c$TARGET_Adjusted) / ntest_complete
+```
+
+The accuracy of the full model is 87.17%. This is a much higher accuracy than the model which only used `Gender`. We can visualize the predictions on the training set using the model computed with all predictor variables, grouping by `Gender` again for comparison to the previous model:  
+
+```{r}
+# Create data frame containing the predicted probabilities and Gender
+predicted_data <- data.frame(
+  probability_of_prod = glmod2$fitted.values,
+  Gender = complete_train_audit_c$Gender)
+ 
+# Plot the predictions 
+ggplot(data = predicted_data, aes(x = Gender, y = probability_of_prod)) +
+  geom_boxplot(aes(color = Gender)) +
+  xlab("Gender") +
+  ylab("Predicted probability of being a productive audit") +
+  geom_hline(yintercept = 313 / (313 + 798), linetype = "dashed", color = "#00BFC4") +
+  geom_hline(yintercept = 57 / (57 + 432), linetype = "dashed", color = "#F8766D")
+```
+
+Now, there is a much wider range of values that the model will predict.
+
+We have now created a very simplistic model (one predictor), and a very complex model (all predictors). 
+
 ### k-NN (k Nearest Neighbours)
 
-A simple classification method is *k Nearest Neighbours.* In this method, the $k$ closest vectors in the training set (in terms of Euclidean distance) are found for each observation in the test set. The classification of an observation in the test set is then decided by performing a "vote" using the $k$ closest vectors. If there are any ties, the ties are broken at random. Additionally, if there are ties in terms of finding the $k^{th}$ nearest vector, all of the candidate vectors are included in the "voting" process. We will be using the `class` package to perform the classification.
+Another simple classification method is *k Nearest Neighbours.* In this method, the $k$ closest vectors in the training set (in terms of Euclidean distance) are found for each observation in the test set. The classification of an observation in the test set is then decided by performing a "vote" using the $k$ closest vectors. If there are any ties, the ties are broken at random. Additionally, if there are ties in terms of finding the $k^{th}$ nearest vector, all of the candidate vectors are included in the "voting" process. We will be using the `class` package to perform the classification.
 
 Since we are dealing with the Euclidean distance, we will have to consider only our numeric variables in this case.
 
@@ -401,7 +605,7 @@ k <- 1:50
 knn_test_acc <- vector(length = 50)
 for (i in 1:length(knn_test_acc)) {
   knn_audit <- knn(train = audit_num_train, test = audit_num_test, 
-                 cl = train_audit_c$TARGET_Adjusted, k = k[i])
+                   cl = train_audit_c$TARGET_Adjusted, k = k[i])
   knn_test_acc[i] <- sum(knn_audit == test_audit_c$TARGET_Adjusted) / ntest
 }
 
@@ -414,28 +618,28 @@ From the plot, we can see that the value of $k$ which resulted in the highest cl
 
 ### Linear and Quadratic Discriminant Analysis
 
-*Discriminant analysis* is a classification technique that uses the training data to determine the boundaries which best separate the classes. We treat the observations of each class as observations from a multivariate normal (MVN) distribution, and compute the boundaries using a formula which depends on the parameters of the MVN distributions. If we assume that the covariance matrices of all the MVN distributions are the same, we perform *Linear Discriminant Analysis* (LDA) and the resulting boundaries are lines. If we relax this assumption, we peform *Quadratic Discriminant Analysis* (QDA) and the resulting boundaries are quadratic. LDA is computationally easy to perform, but linear boundaries may not always be appropriate. QDA gives us more freedom with our boundaries, at the expense of taking longer to perform. 
+*Discriminant analysis* is a classification technique that uses the training data to determine the boundaries which best separate the classes. We treat the observations of each class as observations from a multivariate normal (MVN) distribution, and compute the boundaries using a formula which depends on the parameters of the MVN distributions. If we assume that the covariance matrices of all the MVN distributions are the same, we perform *Linear Discriminant Analysis* (LDA) and the resulting boundaries are lines. If we relax this assumption, we perform *Quadratic Discriminant Analysis* (QDA) and the resulting boundaries are quadratic. LDA is computationally easy to perform, but linear boundaries may not always be appropriate. QDA gives us more freedom with our boundaries, at the expense of taking longer to perform. 
 
-We will use the `MASS` package to perform the discriminant analysis. This package requires an option to be specified for missing values. We will simply omit the missing values in the calculation.
+We will use the `MASS` package to perform the discriminant analysis. 
 
 ```{r}
 # Load library
 library(MASS)
 
 # Perform LDA 
-audit_lda <- lda(formula = TARGET_Adjusted ~ ., data = train_audit_c[, c(1, 6, 8:10)],  
-                 na.action = na.omit)
-lda_predict <- predict(audit_lda, test_audit_c)
-lda_test_acc <- sum(lda_predict$class == test_audit_c$TARGET_Adjusted) / ntest 
+audit_lda <- lda(formula = TARGET_Adjusted ~ ., 
+                 data = complete_train_audit_c[, c(1, 6, 8:10)])
+lda_predict <- predict(audit_lda, complete_test_audit_c)
+lda_test_acc <- sum(lda_predict$class == complete_test_audit_c$TARGET_Adjusted) / ntest_complete
 
 # Perform QDA
-audit_qda <- qda(formula = TARGET_Adjusted ~ ., data = train_audit_c[, c(1, 6, 8:10)],  
-                 na.action = na.omit)
-qda_predict <- predict(audit_qda, test_audit_c)
-qda_test_acc <- sum(qda_predict$class == test_audit_c$TARGET_Adjusted) / ntest 
+audit_qda <- qda(formula = TARGET_Adjusted ~ ., 
+                 data = complete_train_audit_c[, c(1, 6, 8:10)])
+qda_predict <- predict(audit_qda, complete_test_audit_c)
+qda_test_acc <- sum(qda_predict$class == complete_test_audit_c$TARGET_Adjusted) / ntest_complete
 ```
 
-With LDA, our proportion of correctly classified test observations is 0.8, while it is 0.7925 with QDA. Although this may make it seem like LDA is the superior method, this is not the case -- LDA is a subset of QDA, and thus should QDA be able to obtain the same results as LDA given a large enough training set that is representative of the testing set. 
+With LDA, our proportion of correctly classified test observations is 0.79, while it is 0.785 with QDA. Although this may make it seem like LDA is the superior method, this is not the case -- LDA is a subset of QDA, and thus QDA *should* be able to obtain the same results as LDA given a large enough training set that is representative of the testing set. 
 
 Since we performed the discriminatory analysis on more than two numeric variables, we are unable to visualize the results the exact way we did in lecture. There will not be clear lines (or quadratic curves) that separate the class predictions *perfectly* on a 2-dimensional plot, since the calculations were completed in 4 dimensions. Instead, we can create plots of the different 2 variable combinations, using the `klaR` package. Note that the plots below are created for the training data, and do not include any information about the test data.
 
@@ -445,17 +649,17 @@ library(klaR)
 
 # Note: The partimat function calls the lda() and qda() functions from the MASS package
 # Create plot of LDA results on each of the 2 variable combinations 
-partimat(formula = TARGET_Adjusted ~ ., data = train_audit_c[, c(1, 6, 8:10)], 
-         method = "lda", na.action = na.omit, main = "LDA on Audit data")
+partimat(formula = TARGET_Adjusted ~ ., data = complete_train_audit_c[, c(1, 6, 8:10)], 
+         method = "lda", main = "LDA on Audit data")
 
-# Create plot of LDA results on each of the 2 variable combinations 
-partimat(formula = TARGET_Adjusted ~ ., data = train_audit_c[, c(1, 6, 8:10)], 
-         method = "qda", na.action = na.omit, main = "QDA on Audit data")
+# Create plot of QDA results on each of the 2 variable combinations 
+partimat(formula = TARGET_Adjusted ~ ., data = complete_train_audit_c[, c(1, 6, 8:10)], 
+         method = "qda", main = "QDA on Audit data")
 ```
 
 ### Classification trees
 
-One way of classifying our observations into productive and nonproductive audits is through the use of classification trees. There are many ways in R to create classification trees, but we will start by using the `tree` package. The figures below show the resulting classification trees on the training dataset, using the deviance (first tree) and the generalized gini index (second tree) as the measures. Note that the labels have been turned off in the second plot, as the plot of the second tree becomes unreadable otherwise (highly concentrated at the bottom of the tree, implying that the decrease in impurity is fairly low in the bottom branches -- pruning may be necessary). 
+Another way of classifying our observations into productive and nonproductive audits is through the use of classification trees. There are many ways in R to create classification trees, but we will start by using the `tree` package. The figures below show the resulting classification trees on the training dataset, using the deviance (first tree) and the generalized gini index (second tree) as the measures. Note that the labels have been turned off in the second plot, as the plot of the second tree becomes unreadable otherwise (highly concentrated at the bottom of the tree, implying that the decrease in impurity is fairly low in the bottom branches -- pruning may be necessary). 
 
 ```{r, message = FALSE}
 # Load libraries for creating decision trees
@@ -488,7 +692,7 @@ prop_correct_gini <- length(which(tree_gini_predict == test_audit_c$TARGET_Adjus
 
 Using the proportion of correctly classified observations in the test set as a measure of model accuracy, the above models had accuracies on the test set of 86.5% and 82.5% respectively.
 
-One problem with the plotting that we can see immediately is that the `tree` package does not plot categorical variables very well. Rather than displaying the names of categories, the plot displays a concatenation of letters corresponding to the positions of the level names. For example, the first split on the tree on the left is based on the `Marital` vlariable. The plot includes the letters "abdef" on this split, which actually means levels 1, 2, 4, 5 and 6 of the `Marital` variable (corresponding to the categories "Absent", "Divorced", "Married-spouse-absent", "Unmarried" and "Widowed"). 
+One problem with the plotting that we can see immediately is that the `tree` package does not plot categorical variables very well. Rather than displaying the names of categories, the plot displays a concatenation of letters corresponding to the positions of the level names. For example, the first split on the tree on the left is based on the `Marital` variable. The plot includes the letters "abdef" on this split, which actually means levels 1, 2, 4, 5 and 6 of the `Marital` variable (corresponding to the categories "Absent", "Divorced", "Married-spouse-absent", "Unmarried" and "Widowed"). 
 
 In order to create a plot that is a bit more clear about the decision rules, we can use the `rpart` and `rpart.plot` packages. We note that the trees may appear slightly different between the `tree` package implementation and the `rpart` package implementation even if the trees are fairly similar (the `rpart` package does not always create decision rules in the form *var < split*). The plot below shows the classification tree created by the `rpart` package, using the entire dataset. We have used the same value for the minimum number of observations per node as we used in the previous two plots: 
 
@@ -708,91 +912,57 @@ plot(mtry, rf_test_acc, type = "l", main = "Test Accuracy using Random Forests",
 
 The highest accuracy occurred when `mtry` was set to 4. In this case, the prediction accuracy on the test set was 87.2%. While this is a bit lower than what we obtained with bagging, it should be noted that the computational time for this method was significantly lower than it was for bagging. 
 
-## Modelling 
+## Modeling
 
-### Linear models
+In this section, we will use a variety of methods to predict the continuous response variable `RISK_Adjustment` for the test set, using the training set to develop and validate models. 
 
-We can start with Ordinary Least Squares regression: 
+### Ordinary Least Squares Regression
+
+To begin our modeling, we will use ordinary least squares regression (OLS). We will create all possible subsets of the predictors and find the *best* model, in terms of the SSE. The `leaps` package has a function which performs all possible subsets, and returns an object containing the best models for each number of predictors, along with performance metrics. 
+
+The plot below shows the various performance criteria (on the training data) for the "best" model for each number of predictors.
 
 ```{r}
-# Set seed for reproducibility 
-set.seed(23)
+# Load package for performing all subsets regression 
+library(leaps)
 
-# Create test training split 
-n <- nrow(audit)
-train_indices <- sample(1:n, size = round(0.8 * n, 0), replace = FALSE)
-train_audit <- audit[train_indices, ]
-test_audit <- audit[-train_indices, ]
+# Perform all subsets regression
+lm_subsets <- regsubsets(x = RISK_Adjustment ~ ., data = complete_train_audit_m,
+                         method = "exhaustive", nvmax = 9)
+sub_summary <- summary(lm_subsets)
 
-# Using just training data: 
-# Start with just numeric variables
-lmod1 <- lm(RISK_Adjustment ~ Income + Deductions + Hours, data = train_audit)
-# Predict on test: 
-
-lmod1_predict <- predict(lmod1, test_audit)
-
-# Just numeric variables, without intercept term 
-lmod2 <- lm(RISK_Adjustment ~ Income + Deductions + Hours - 1, data = train_audit)
-# Predict on test: 
-lmod2_predict <- predict(lmod2, test_audit)
-
-# Create table comparing AIC, adjusted R^2 of various models, % diff on predictions
-results_train <- data.frame(R2 = c(summary(lmod1)$adj.r.squared, summary(lmod2)$adj.r.squared),
-                            AIC = c(AIC(lmod1), AIC(lmod2)), 
-                            avg_percent_diff = c(mean(lmod1_predict - test_audit$RISK_Adjustment),
-                                             mean(lmod2_predict - test_audit$RISK_Adjustment)))
-
-# Using all data:
-# Start with just numeric variables
-lmod1 <- lm(RISK_Adjustment ~ Income + Deductions + Hours, data = audit)
-
-# Just numeric variables, without intercept term 
-lmod2 <- lm(RISK_Adjustment ~ Income + Deductions + Hours - 1, data = audit)
-
-# All predictor variables
-lmod1 <- lm(RISK_Adjustment ~ Age + Employment + Education + Marital + Occupation + 
-              Income + Gender + Deductions + Hours, data = audit)
-
-# Create table comparing AIC, adjusted R^2 of various models 
-results_train <- data.frame(R2 = c(summary(lmod1)$adj.r.squared, summary(lmod2)$adj.r.squared),
-                            AIC = c(AIC(lmod1), AIC(lmod2)),
-                            MSE = c(sum(lmod1$residuals^2), sum(lmod2$residuals^2)))
-
-# Look at some diagnostic plots (neither meet the assumptions clearly)
-par(mfrow = c(1, 2))
-plot(lmod1, which = 2)
-plot(lmod2, which = 2)
-
-# Look at observation 1551 (outlier from the previous plot)
-# Only declared 23800, risk adjustment of 112243??? 
-audit[1551, ]
+# Plot the performance criteria
+par(mfrow = c(2, 2))
+plot(1:9, sub_summary$rss, xlab = "Number of predictors", ylab = "SSE", 
+     type = "b", main = "SSE")
+plot(1:9, sub_summary$bic, xlab = "Number of predictors", ylab = "BIC", 
+     type = "b", main = "BIC")
+plot(1:9, sub_summary$adjr2, xlab = "Number of predictors", ylab = expression("R^2"), 
+     type = "b", main = "Adjusted R^2")
+plot(1:9, sub_summary$cp, xlab = "Number of predictors", ylab = "C_p", 
+     type = "b", main = "Mallow's C_p")
+lines(1:9, 1:9, col = "red")
 ```
 
 ### MARS
 
 *Multivariate Adaptive Regression Splines*, commonly known as MARS, is a non-parametric way of modelling data using a series of piecewise linear regression models. 
 
-While the `mda` package in R offers a `mars` function to perform MARS, there is a 2019 package called `earth` which uses cross validation to find the optimal placements of knots across all provided predictor variables, and prunes accordingly. The function continues searching until the change in $R^2$ is less than a specified threshold. 
+While the `mda` package in R offers a `mars` function to perform MARS, there is a package called `earth` which uses cross validation to find the optimal placements of knots across all provided predictor variables, and prunes accordingly. The function continues searching until the change in $R^2$ is less than a specified threshold. 
 
 This package also works well the `caret` package for further tuning of parameters. The main parameters that we wish to tune when using MARS are `degree` and `nprune`. The `degree` parameter controls the maximum degree of interaction terms that are allowed in the model, and the `nprune` parameter controls the maximum number of predictors that are allowed in the model. We will use the `caret` package to perform 10-fold cross validation to pick the best values for `degree` and `nprune`. The `caret` package recommends using RMSE (root mean squared error) as the selection criterion for parameter tuning when the response variable is continuous.  
 
-```{r}
+```{r, eval = FALSE}
 # Load packages for performing MARS and for tuning parameters
 library(earth)
 library(caret)
-
-# Keep only the observations that have no missing values 
-# since the `earth` function cannot handle missing values
-complete_train_audit_m <- train_audit_m[complete.cases(train_audit_m), ]
 
 # Create a parameter tuning "grid" 
 parameter_grid <- floor(expand.grid(degree = 1:4, nprune = seq(2, 50, by = 5)))
 
 # Set seed for reproducibility
 set.seed(2020)
-```
 
-```{r, eval = FALSE}
 # Perform cross-validation
 cv_mars_audit <- train(x = complete_train_audit_m[, 1:9], 
                        y = complete_train_audit_m[, 10], 
@@ -805,6 +975,9 @@ save(cv_mars_audit, file = "cv_mars_audit.RDa")
 ```
 
 ```{r}
+# Load package
+library(earth)
+
 # Load files 
 load("cv_mars_audit.RDa")
 
@@ -818,9 +991,6 @@ ggplot(cv_mars_audit) +
 We can see that the root mean squared error is minimized when `degree` is 1 and `nprune` is 2. For all values of these parameters, we can see that this quantity is very high. When we consider that the largest value of `RISK_Adjustment` in our training set (our response variable) is 99999, we see that this value of RMSE is extremely high and suggests that our model does not fit the training data very well. 
 
 ```{r}
-# Remove observations with missing values from the test set 
-complete_test_audit_m <- test_audit_m[complete.cases(test_audit_m), ]
-
 # Use the best model to predict RISK_Adjustment for the test set 
 mars_predict <- predict(cv_mars_audit$finalModel, newdata = complete_test_audit_m)
 
@@ -964,8 +1134,7 @@ zi_negbin_mae <- mean(abs(complete_test_audit_m$RISK_Adjustment - zi_negbin_pred
 # Combine results into a single data frame
 results <- data.frame(SSE = c(zip_sse, zi_negbin_sse), 
                       MAE = c(zip_mae, zi_negbin_mae))
-row.names(results) <- c("Zero-Inflated Poisson", 
-                    "Zero-Inflated Negative Binomial")
+row.names(results) <- c("Zero-Inflated Poisson", "Zero-Inflated Negative Binomial")
 
 # Display results
 kable(results) %>% 
@@ -1010,3 +1179,7 @@ We can see that, in both cases, the zero-inflated models resulted in much smalle
 # References
 
 https://rstudio-pubs-static.s3.amazonaws.com/202050_60f5c6dd1b884ba3ac29f1aef5c848bb.html
+
+
+
+
