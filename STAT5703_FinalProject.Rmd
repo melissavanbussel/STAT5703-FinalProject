@@ -66,7 +66,8 @@ library(skimr) # To skim the structure of the dataset
 audit$TARGET_Adjusted <- as.factor(audit$TARGET_Adjusted)
 
 # Looking at the structure of our data
-skim_without_charts(audit)
+audit_skim <- skim_without_charts(audit)
+audit_skim[ -c(11:13)]
 ```
 
 We see that we have 6 categorical and 6 numeric variables. The numeric variables are on very different scales, indicating that normalization of the data will be necessary for modeling. We can also see a couple of class imbalances. With our binary response variable, only 463 out of 2000 individuals (or roughly 23%) resulted in productive audits. Additionally, significantly more males than females were sampled. The average income in our dataset is quite high, despite the fact that the minimum income is $610, suggesting that there may be influential outliers. We also notice that most people have low deductions, if any. 
@@ -74,6 +75,7 @@ We see that we have 6 categorical and 6 numeric variables. The numeric variables
 The only variables with missing values are `Employment` and `Occupation`, with roughly 5% missingness. Note that __Employment__ has 100 `NA`s while __Occupation__ has 101 `NA`s. 
 
 ```{r, eval = FALSE}
+# Which observation has an NA for Occupation, but not for Employment?
 which(is.na(audit$Employment) != is.na(audit$Occupation))
 which(audit$Employment == "Unemployed")
 ```
@@ -93,21 +95,7 @@ audit$Employment[volunteer] <- "SelfEmp"
 audit$Employment <- droplevels(audit$Employment) # drop unused levels (Volunteer)
 ```
 
-A few of the risk adjustments are negative: 
-
-```{r}
-results <- audit[which(audit$RISK_Adjustment < 0), -c(1, 2, 5, 8)]
-row.names(results) <- NULL 
-
-# Load package for displaying tables 
-library(kableExtra)
-
-# Display table 
-kable(results) %>% 
-  kable_styling(latex_options = "striped")
-```
-
-Perhaps negative adjustments reflect individuals who over-reported their income and thus paid more taxes than they were supposed to.
+A few (7) of the risk adjustments are negative. Perhaps negative adjustments reflect individuals who over-reported their income and thus paid more taxes than they were supposed to.
 
 We note that "Absent" is a valid marital status. According to the United States Census Bureau [@census], "absent" refers to someone who is married but living away (e.g., in a nursing home). Similarly, "Married-spouse-absent" refers to a person who is married but whose spouse is living somewhere else.
 
@@ -165,16 +153,7 @@ audit_edu$Education <- as.integer(audit_edu$Education)
 
 We can use a scatterplot matrix to get an overview of our new data. We will exclude the categorical variables from this visualization.
 
-```{r}
-# Load Dr. Mills' code for the version we learned in class
-source("pairs_ext.r")
-
-# Create scatterplot matrices 
-pairs(audit_edu[ , -c(1, 3, 5, 6)], col = as.numeric(audit_edu$TARGET_Adjusted) + 4)
-pairs(audit_edu[ , -c(1, 3, 5, 6)], upper.panel = panel.cor, diag.panel = panel.hist)
-```
-
-```{r, eval = FALSE, warning = FALSE, message = FALSE}
+```{r, warning = FALSE, message = FALSE}
 # Scatterplot matrix using ggplot
 ggpairs(audit_edu[, -c(1, 3, 5, 6)],
         cardinality_threshold = 20,
@@ -294,7 +273,7 @@ ggplot(audit_hourly_wage,
   # Label points over an hourly wage of $1500
   geom_label(data = audit_hourly_wage %>% filter(Hourly_Wage > 1500), 
              aes(label = paste0("Hourly wage = $", Hourly_Wage)),
-             x = 2000, y = 1e5, show.legend = FALSE) + 
+             x = 1900, y = 1e5, show.legend = FALSE) + 
   scale_x_continuous(name = "Hourly Wage", labels = scales::comma) +
   scale_y_continuous(name = "Income", labels = scales::comma) +
   ggtitle("Relationship between Income and Hourly Wage")
@@ -324,9 +303,11 @@ ggplot(audit_hourly_wage, aes(x = Occupation, y = Hourly_Wage,
 
 We see that 2 of the largest hourly wages have missing values for their occupations. One observation that stands out as a possible error is the individual who makes $1372 per hour, but whose occupation is "clerical". Additionally, we see that some of the largest risk adjustments are for those who have low hourly wages.
 
-# Dimension Reduction
+# Unsupervised Learning 
 
-## PCA
+## Dimension Reduction
+
+### Principal Components Analysis (PCA)
 
 To perform dimension reduction, we first perform principal components analysis. For this method, we can only use numeric variables. While we could convert categorical variables to numeric variables, it doesn't make sense to do so for PCA. This is because PCA relies on distances between vectors, and the distance between categorical variables is unclear.
 
@@ -370,57 +351,178 @@ biplot(audit_pca, sub = "Biplot of first 2 principal components", scale = 0)
 We can see from the biplot that the first principal component corresponds most to `Income` and `Age`. Similarly, the second principal component corresponds most to `Hours` and `Deductions`. We can confirm our results by looking at the rotation matrix: 
 
 ```{r}
+# Load package for displaying tables
+library(kableExtra)
+
 # Display rotation matrix 
 kable(audit_pca$rotation) %>% 
   kable_styling(latex_options = "striped")
 ```
 
-# Data Reduction
+### Self-organizing maps (SOM)
 
-# Unsupervised Learning - Clustering
+Self-organizing maps were used as another potential dimension-reduction technique. We employed a popular R package called `kohonen` to create the self-organizing maps. This algorithm was run on the four numeric variables in the dataset. These variables were standardized using a correlation transformation. The figure below shows a five-by-five "codes" plot. Individual cases are mapped to each circle (node) in the plot based on shared characteristics in the data. The relative size of each coloured slice in a node denotes the relative level of that variable compared to the others.  
+
+```{r}
+# Load package for creating SOMs 
+library(kohonen)
+
+# Define correlation transformation function (from section 3 of the lecture notes)
+f.data.std <- function(data) {
+  data <- as.matrix(data) 
+  bar <- apply(data, 2, mean) 
+  s <- apply(data, 2, sd) 
+  t((t(data) - bar)/s)
+}
+
+# Create SOM and "codes" plot 
+g <- kohonen::somgrid(xdim = 5, ydim = 5, topo = "rectangular")
+X <- as.matrix(f.data.std(audit[, c(2, 7, 9:10)]))
+map <- kohonen::som(X, grid = g)
+plot(map,type = 'codes', main = " 5x5 codes plot") 
+```
+
+__Going to review some of the plots in the visualization section to just reiterate some of those patterns here.__
+
+```{r}
+# Plot the number of cases per node
+plot(map, type = "count") 
+```
+
+This plot shows the counts for cases in each node of the codes plot. Many nodes contain under fifty cases, though some nodes appear to contain over 100 cases, and one node over 200 cases. 
 
 ## Clustering
 
-## Self-organizing maps
+### K-means clustering
 
-Self-organizing maps is a method of unsupervised learning. It is described as being akin to k-means clustering, but as a type of dimension reduction, rather than data reduction. 
+K-means clustering was performed using the numeric variables in the audit dataset (i.e. `Age`, `Income`, `Deductions`, `Hours`). These variables were standardized using a correlation transformation (function from section three of the class notes). The algorithm was run to produce sets of two to fourteen clusters. The within cluster sum of squares and the Davies-Bouldin index were also calculated for each cluster to determine the appropriate number. We were hoping to perhaps see a two-cluster split of the data for productive and non-productive audits. The figure below shows a four-by-four array of plots: The first thirteen are scatter plots showing `Age` vs. `Deductions` -- two variables that appeared to show some clustering in our scatter plot matrices -- with the clusters highlighted in different colours; the last three include seperate plots for the within cluster sum of squares and the Davies-Bouldin index for different numbers of clusters, followed by a scatter plot of `Age` vs. `Deductions` with the `TARGET_Adjusted` variable coloured for comparison with the two-cluster plot.  
 
-```{r, eval = FALSE}
-# Self-Orgnizing Map    __________________________________________________
+```{r}
+# Load Dr. Mills' code 
+source("vq_helpers.r")
 
-# som package used in class notes
-install.packages("som")
-library(som)
+# Set seed for reproducibility 
+set.seed(123)
 
-set.seed(007)
+# Set up
+my_colours <- sample(rainbow(14))
+oldpar <- par(mfrow = c(4, 4))
+par(mar = c(2, 1, 2, 1))
+errs <- rep(0, 10)
+DBI <- rep(0, 10)
 
-# run som function using normalized data
-som_aud_s <- som::som(audit_N[,13:17], xdim=5, ydim=5, topol="hexa", init="linear")
-plot(som_aud)
+# Peform kmeans clustering for varying values of k
+for (i in 2:14) {
+  KM <- kmeans(f.data.std(audit[, c(2, 7, 9:10)]), i, 50)
+
+  if (i == 2) {
+    cluster_labels <- KM$cluster
+
+    # Calculate the proportion of correctly labelled points
+    prop_correct_km <- round(sum(cluster_labels == as.numeric(audit$TARGET_Adjusted)) /  nrow(audit), 5)
+    plot(x = audit$Age,y = audit$Deductions, col = my_colours[KM$cluster],
+         main = paste(i," clusters"))
+  } else {
+    KM <- kmeans(f.data.std(audit[,c(2, 7, 9:10)]), i, 50)
+    cluster_labels <- KM$cluster
+    plot(x = audit$Age,y = audit$Deductions, col = my_colours[KM$cluster],
+         main = paste(i," clusters"))
+  }
+  errs[i-1] <- sum(KM$withinss)
+  DBI[i-1] <- Davies.Bouldin(KM$centers, KM$withinss, KM$size)
+}
+
+# Plot SS
+plot(2:14, errs, type = "b", main = "SS")
+
+# Plot Davies-Bouldin
+plot(2:14, DBI, type = "b", main = "Davies-Bouldin")
+
+# Plot with `TARGET_Adjusted` coloured in 
+plot(x = audit$Age, y = audit$Deductions, type = "p", 
+     xlim = c(10, 90), ylim = c(0, 3000),
+     col = my_colours[audit$TARGET_Adjusted], main = "Plot for Target")
+
+par(oldpar)
+
+DBI.min <- which(DBI == min(DBI)) +1
+err_diff <- diff(errs)
+max_drop <- min(err_diff)
+k_max_drop <- which(err_diff == max_drop) + 1
 ```
-Honestly, I have no idea how to interpret this plot. It's just the only generic function from her notes that she didn't write, everything else seemed like pedagogical gibberish. 
 
-The kohonen package is also popular for creating self-organizing maps. 
-```{r, eval = FALSE}
-# kohonen package, popular for SOMs
-install.packages("kohonen")
-library(kohonen)
+The Davies-Bouldin index shows that two clusters indeed appears to be the best number for these variables, although the largest drop in the within cluster sum of squares appeared between four and five clusters. The plot for `TARGET_Adjusted` matches fairly well with the two-cluster plot. The two-cluster plot appears to show all of the zero-deduction cases in one cluster, with a few of the lower decuction cases, and the higher deduction cases as a separate cluster. The `TARGET_Adjusted` plot shows that many of these higher-deduction cases were productive audits, as were a smaller number of the zero-deduction cases. Comparing the number of cases in the two clusters versus those for the `TARGET_Adjusted` variable, we calculated that approximately 77% of the cases were correctly clustered. 
 
-g <- kohonen::somgrid(xdim = 5, ydim = 5, topo = "rectangular")
-map <- kohonen::som(X = as.matrix(audit_N[,13:17]), grid = g)
-plot(map, type = 'changes') # probably won't use this
-```
-This first plot is sort of a diagnostic showing how many interations were performed. Probably don't care about this but it's interesting to see. 
-```{r, eval = FALSE}
-plot(map, main = "5x5 code plot of numeric variables in audit data")
-```
-This code plot shows clusters of different levels of the numeric variables in our dataset, with larger pieces indicating higher levels of a given variable. With respect to the risk adjustment variable, we see one node where moderate amounts of risk adjustment are associated with lower ages and deductions. 
-```{r, eval = FALSE}
-plot(map, type = 'count') 
-```
-This plot shows the counts of cases in each node. Maybe this could be displayed next to the code plot. Don't really know what to say about this, I think it really just illustrates how the individual cases are mapped to each node. 
+### Hierarchical clustering
 
-# Supervised Learning - Classification and Modelling
+Hierarchical clustering was also used to see how how well the data appears to segregate into two clusters. Plots showing the results for six different linkage methods respectively are shown in the figure below, along with proportion of correctly clustered cases when compared with the `TARGET_Adjusted` variable. 
+
+```{r}
+audit_dist <- dist(audit[, c(2, 7, 9:10)], method = "euclidean")
+
+# Try various linkage methods
+hc_single <- hclust(audit_dist, method = "single")
+hc_complete <- hclust(audit_dist, method = "complete")
+hc_average <- hclust(audit_dist, method = "average")
+hc_ward <- hclust(audit_dist, method = "ward.D")
+hc_ward2 <- hclust(audit_dist, method = "ward.D2")
+hc_mcquitty <- hclust(audit_dist, method = "mcquitty")
+
+# Plot dendrograms, add proportion of correctly labelled points underneath
+par(mfrow = c(3, 2))
+
+# Single Linkage
+plot(hc_single, cex = 0.75, labels = FALSE) 
+rect.hclust(hc_single, k = 2)
+cluster_labels <- cutree(hc_single, k = 2)
+prop_correct_single <- round(sum(cluster_labels == as.numeric(audit$TARGET_Adjusted)) / nrow(audit), 5)
+correct_single <- paste("Proportion correct:", prop_correct_single) 
+mtext(text = correct_single, side = 1, line = 1)
+
+# Complete Linkage
+plot(hc_complete, cex = 0.75, labels = FALSE) 
+rect.hclust(hc_complete, k = 2)
+cluster_labels <- cutree(hc_complete, k = 2)
+prop_correct_complete <- round(sum(cluster_labels == as.numeric(audit$TARGET_Adjusted)) / nrow(audit), 5)
+correct_complete <- paste("Proportion correct:", prop_correct_complete) 
+mtext(text = correct_complete, side = 1, line = 1)
+
+# Average Linkage
+plot(hc_average, cex = 0.75, labels = FALSE) 
+rect.hclust(hc_average, k = 2)
+cluster_labels <- cutree(hc_average, k = 2)
+prop_correct_average <- round(sum(cluster_labels == as.numeric(audit$TARGET_Adjusted)) / nrow(audit), 5)
+correct_average <- paste("Proportion correct:", prop_correct_average) 
+mtext(text = correct_average, side = 1, line = 1)
+
+# Ward Linkage
+plot(hc_ward, cex = 0.75, labels = FALSE) 
+rect.hclust(hc_ward, k = 2)
+cluster_labels <- cutree(hc_ward, k = 2)
+prop_correct_ward <- round(sum(cluster_labels == as.numeric(audit$TARGET_Adjusted)) / nrow(audit), 5)
+correct_ward <- paste("Proportion correct:", prop_correct_ward) 
+mtext(text = correct_ward, side = 1, line = 1)
+
+# Ward-2 Linkage
+plot(hc_ward2, cex = 0.75, labels = FALSE) 
+rect.hclust(hc_ward2, k = 2)
+cluster_labels <- cutree(hc_ward2, k = 2)
+prop_correct_ward2 <- round(sum(cluster_labels == as.numeric(audit$TARGET_Adjusted)) / nrow(audit), 5)
+correct_ward2 <- paste("Proportion correct:", prop_correct_ward2) 
+mtext(text = correct_ward2, side = 1, line = 1)
+
+# McQuitty Linkage
+plot(hc_mcquitty, cex = 0.75, labels = FALSE) 
+rect.hclust(hc_mcquitty, k = 2)
+cluster_labels <- cutree(hc_mcquitty, k = 2)
+prop_correct_mcquitty <- round(sum(cluster_labels == as.numeric(audit$TARGET_Adjusted)) / nrow(audit), 5)
+correct_mcquitty <- paste("Proportion correct:", prop_correct_mcquitty) 
+mtext(text = correct_mcquitty, side = 1, line = 1)
+```
+
+While the single-, average-, and McQuitty-linkage methods appear to give higher levels of proportion correct (>0.76 each), one can see that virtually all of the cases have been allocated to a single cluster. Since approximately 23% of the cases are productive audits, it is clear that this clustering isn't really separating out any of the productive audits. Overall, the hierarchical clustering does not appear to do a reasonably good job for any of the six linakge methods. 
+
+# Supervised Learning
 
 ## Set-Up: Training and Test Set
 
@@ -524,18 +626,6 @@ ggplot(data = predicted_data, aes(x = Gender, y = probability_of_prod)) +
 ```
 
 Therefore, the model is simply predicting the conditional probabilities from the training data.
- 
-```{r}
-## Now calculate the overall "Pseudo R-squared" and its p-value
-ll_null <- glmod1$null.deviance / (-2)
-ll_proposed <- glmod1$deviance/ (-2)
- 
-## McFadden's Pseudo R^2 = [ LL(Null) - LL(Proposed) ] / LL(Null)
-(ll_null - ll_proposed) / ll_null
- 
-## The p-value for the R^2
-1 - pchisq(2 * (ll_proposed - ll_null), df = (length(glmod1$coefficients) - 1))
-```
 
 Next, we will fit the full model (using all available predictor variables). Note that in order to do this, we will need to deal with the missing values. Since our missing values are only for the categorical variables and since we did not discuss in class how to interpolate categorical variables, we will simply remove these observations when training any models which cannot handle missing values. 
 
@@ -659,7 +749,7 @@ partimat(formula = TARGET_Adjusted ~ ., data = complete_train_audit_c[, c(1, 6, 
 
 ### Classification trees
 
-Another way of classifying our observations into productive and nonproductive audits is through the use of classification trees. There are many ways in R to create classification trees, but we will start by using the `tree` package. The figures below show the resulting classification trees on the training dataset, using the deviance (first tree) and the generalized gini index (second tree) as the measures. Note that the labels have been turned off in the second plot, as the plot of the second tree becomes unreadable otherwise (highly concentrated at the bottom of the tree, implying that the decrease in impurity is fairly low in the bottom branches -- pruning may be necessary). 
+Another way of classifying our observations into productive and nonproductive audits is through the use of classification trees. There are many ways in R to create classification trees, but we will start by using the `tree` package. The figure below shows the resulting classification tree on the training dataset, using the deviance as the measure. Note that the generalized gini index plot has been excluded, as it is unreadable (highly concentrated at the bottom of the tree, implying that the decrease in impurity is fairly low in the bottom branches -- pruning may be necessary). 
 
 ```{r, message = FALSE}
 # Load libraries for creating decision trees
@@ -681,7 +771,7 @@ source("EJNPartitionTree.r")
 # Visualize the results 
 plot.tree.EJN(tree_dev)
 text.tree.EJN(tree_dev, all = TRUE)
-plot.tree.EJN(tree_gini)
+# plot.tree.EJN(tree_gini)
 
 # Calculate prediction accuracy on the test set 
 tree_dev_predict <- predict(tree_dev, test_audit_c, type = "class")
@@ -731,22 +821,14 @@ plot(tree_cv_dev)
 plot(tree_cv_gini)
 ```
 
-We can now use the results of this cross validation to visualize the trees that occurs when we prune them as per the suggested sizes: 
+We can now use the results of this cross validation to prune the trees to the suggested sizes. The accuracy on the test set has now increased: 
 
 ```{r}
-# Use the results of the cross validation to plot the pruned trees
-par(mfrow = c(1, 2))
+# Use the results of the cross validation to prune the trees
 pruned_tree_dev <- prune.misclass(tree_dev, best = 4)
-plot.tree.EJN(pruned_tree_dev)
-text.tree.EJN(pruned_tree_dev, all = TRUE)
 pruned_tree_gini <- prune.misclass(tree_gini, best = 5)
-plot.tree.EJN(pruned_tree_gini)
-text.tree.EJN(pruned_tree_gini, all = TRUE)
-```
 
-Now, the trees look much cleaner. The accuracy on the test set has also increased: 
-
-```{r}
+# Compute classification accuracy on the test set
 pruned_tree_dev_pred <- predict(pruned_tree_dev, test_audit_c, type = "class")
 pruned_tree_gini_pred <- predict(pruned_tree_gini, test_audit_c, type = "class")
 prop_correct_dev_prune <- length(which(pruned_tree_dev_pred == test_audit_c$TARGET_Adjusted)) / ntest
@@ -755,7 +837,7 @@ prop_correct_gini_prune <- length(which(pruned_tree_gini_pred == test_audit_c$TA
 # Create table to display the results
 results <- data.frame(Original = c(prop_correct_dev, prop_correct_gini),
                       Pruned = c(prop_correct_dev_prune, prop_correct_gini_prune))
-row.names(results) <- c("Deviance", "Gini")
+row.names(results) <- c("Deviance", "Generalized Gini")
 
 # Display the results
 library(kableExtra)
@@ -912,6 +994,136 @@ plot(mtry, rf_test_acc, type = "l", main = "Test Accuracy using Random Forests",
 
 The highest accuracy occurred when `mtry` was set to 4. In this case, the prediction accuracy on the test set was 87.2%. While this is a bit lower than what we obtained with bagging, it should be noted that the computational time for this method was significantly lower than it was for bagging. 
 
+### Neural Networks
+
+Finally, we will use neural networks to classify our observations into productive and nonproductive audits. We begin by using the `nnet` package, starting with 0 hidden layers and a weight decay parameter of 0.0005. Since the results will depend on the (randomly chosen) initial weights, we will try 100 different initial weighting options. We note that our categorical variables are converted to one-hot encoded variables, and thus we end up with a total of 44 weights for each initialization. We can't *really* visualize this, so we instead plot the iteration number vs. the minima reached, and the iteration number vs. the classification accuracy on the test data.
+
+```{r, eval = FALSE}
+# Load package for creating neural networks
+library(nnet)
+
+# Set seed for reproducibility 
+set.seed(17)
+
+# Use the nnet package to create neural networks with 0 hidden layers 
+nnet_results <- matrix(nrow = 100, ncol = 2)
+for (i in 1:100) {
+  audit_nnet <- nnet(formula = TARGET_Adjusted ~ ., data = complete_train_audit_c, 
+                     size = 0, skip = TRUE, range = 0.1, decay = 5e-4, maxit = 500)
+  nnet_predict <- round(predict(audit_nnet, complete_test_audit_c), 0)
+  nnet_results[i, 1] <- audit_nnet$value
+  nnet_results[i, 2] <- sum(nnet_predict[, 1] == complete_test_audit_c$TARGET_Adjusted) / ntest_complete
+}
+
+# Save results
+save(nnet_results, file = "nnet_results.RDa")
+```
+
+```{r}
+# Load results 
+load("nnet_results.RDa")
+
+# Plot results from the nnet function
+par(mfrow = c(1, 2))
+plot(nnet_results[, 1], xlab = "Iteration Number", ylab = "Minima",
+     main = "Results from nnet function")
+plot(nnet_results[, 2], xlab = "Iteration Number", 
+     ylab = "Classification Accuracy on Test Set",
+     main = "Results from nnet function", 
+     ylim = c(0.871, 0.872))
+```
+
+We see that, in this case, the different initial weightings *did not* have an effect on our classification accuracy -- in every case, the accuracy was 87.17%. The minima found "jumped around" a bit, but was the same value within 3 decimal points regardless of the starting points. 
+
+This accuracy was very high even with such a simple model, but we will now try to improve it. We will use the `ANN2` package, which will allow us to tune more parameters (such as activation functions, optimization types), and apply regularization techniques that we learned about in our Deep Learning research project.
+
+```{r, eval = FALSE}
+# Load package for creating neural networks 
+library(ANN2)
+
+# Set seed for reproducibility
+set.seed(29)
+
+# Convert categorical variables to one-hot encoded variables
+one_hot_train <- model.matrix(object = TARGET_Adjusted ~ . - 1, 
+                                data = complete_train_audit_c)
+one_hot_test <- model.matrix(object = TARGET_Adjusted ~ . - 1, 
+                             data = complete_test_audit_c)
+
+# Create a parameter tuning "grid" 
+parameter_grid <- expand.grid(activ.functions = c("tanh", "sigmoid", "relu", "linear"),
+                              optim.type = c("sgd", "rmsprop", "adam"),
+                              L2 = seq(0, 1, by = 0.1))
+
+nn_test_acc <- vector(length = nrow(parameter_grid))
+for (i in 1:nrow(parameter_grid)) {
+  # Create neural network
+  audit_nn <- neuralnetwork(X = one_hot_train, 
+                            y = complete_train_audit_c[, 10], 
+                            hidden.layers = NA, 
+                            loss.type = "log", 
+                            regression = FALSE,
+                            activ.functions = as.character(parameter_grid$activ.functions[i]),
+                            optim.type = as.character(parameter_grid$optim.type[i]), 
+                            L2 = parameter_grid$L2[i])
+
+  # Compute classification accuracy on the test set
+  nn_predict <- as.numeric(predict(audit_nn, newdata = one_hot_test)$predictions)
+  nn_test_acc[i] <- sum(nn_predict == complete_test_audit_c$TARGET_Adjusted) / ntest_complete
+}
+# Save results
+save(nn_test_acc, file = "nn_test_acc.RDa")
+
+# Find parameters for the best model
+best_params <- parameter_grid[which.max(nn_test_acc), ]
+
+# Set seed for reproducibility 
+set.seed(94)
+
+# Play around with more neurons 
+num_neurons <- seq(2, 64, by = 1)
+nn_test_acc_2 <- vector(length = length(num_neurons))
+for (i in 1:length(num_neurons)) {
+  # Create neural network
+  audit_nn <- neuralnetwork(X = one_hot_train, 
+                            y = complete_train_audit_c[, 10], 
+                            hidden.layers = num_neurons[i], 
+                            loss.type = "log", 
+                            regression = FALSE,
+                            activ.functions = as.character(best_params$activ.functions),
+                            optim.type = as.character(best_params$optim.type), 
+                            L2 = best_params$L2)
+
+  # Compute classification accuracy on the test set
+  nn_predict <- as.numeric(predict(audit_nn, newdata = one_hot_test)$predictions)
+  nn_test_acc_2[i] <- sum(nn_predict == complete_test_audit_c$TARGET_Adjusted) / ntest_complete
+}
+
+# Save results
+save(nn_test_acc_2, file = "nn_test_acc_2.RDa")
+```
+
+The activation functions we will search over are hyperbolic tangent, sigmoid, ReLU, and linear. We will also try three different optimization techniques: stochastic gradient descent, RMSProp (Hinton et al., 2012), and Adam (Kingma and Ba, 2014). Finally, we try varying values for $\lambda$ with L2 regularization. The plot below (left) shows the classification accuracy on the test data for the various combinations of parameters. The best accuracy was 88.22%, just 0.03% worse than our results from bagging classification trees. This was achieved using a linear activation function with stochastic gradient descent, and no hidden layers or regularization. 
+
+Next, we add 1 hidden layer and vary the number of neurons in this hidden layer, from 2 to 64. The plot below (right) shows the classification accuracy on the test data as a function of the number of hidden neurons. The optimal choice was 39 neurons in the hidden layer, resulting in an accuracy of 88.48% on the test set, which was the highest accuracy we achieved with any of the models we tried. The computational time for the neural networks was also lower than for the bagging of classification trees (second best results).
+
+```{r}
+# Load results
+load("nn_test_acc.RDa")
+load("nn_test_acc_2.RDa")
+
+# Plot the classification accuracy on the test set
+par(mfrow = c(1, 2))
+boxplot(nn_test_acc, type = "l", main = "Varying Neural Network Parameters", 
+     ylab = "Classification Accuracy on Test Set (%)", 
+     cex.main = 0.75)
+plot(x = seq(2, 64, by = 1), y = nn_test_acc_2, type = "l",
+     main = "Varying Number of Neurons in Hidden Layer", 
+     xlab = "Number of neurons", 
+     ylab = "Classification Accuracy on Test Set (%)",
+     cex.main = 0.75)
+```
+
 ## Modeling
 
 In this section, we will use a variety of methods to predict the continuous response variable `RISK_Adjustment` for the test set, using the training set to develop and validate models. 
@@ -927,7 +1139,8 @@ The plot below shows the various performance criteria (on the training data) for
 library(leaps)
 
 # Perform all subsets regression
-lm_subsets <- regsubsets(x = RISK_Adjustment ~ ., data = complete_train_audit_m,
+lm_subsets <- regsubsets(x = RISK_Adjustment ~ .,
+                         data = complete_train_audit_m,
                          method = "exhaustive", nvmax = 9)
 sub_summary <- summary(lm_subsets)
 
@@ -944,7 +1157,38 @@ plot(1:9, sub_summary$cp, xlab = "Number of predictors", ylab = "C_p",
 lines(1:9, 1:9, col = "red")
 ```
 
-### MARS
+Mallow's $C_p$ is approximately equal to $p$ (red line) when there are 4 predictors. The BIC also happens to reach a minimum at $p = 4$, and the SSE and $R^2_{adj}$ see little improvement past this value.
+
+```{r, eval = FALSE}
+# Find which 4 predictors to include in the model
+which(sub_summary$which[4, ] == TRUE)
+```
+
+By our selection criteria, the best model includes `Employment`, `Education`, `Marital`, and `Occupation` as the predictors.
+
+```{r}
+# Create the "best" model, as selected by our criteria
+lmod <- lm(RISK_Adjustment ~ Employment + Education + Marital + Occupation,
+           data = complete_train_audit_m)
+
+# Predict on test data: 
+lmod_predict <- predict(lmod, complete_test_audit_m)
+
+# Get the SSE 
+lmod_sse <- sum((complete_test_audit_m$RISK_Adjustment - lmod_predict)^2)
+
+# Get the mean absolute error 
+lmod_mae <- mean(abs(complete_test_audit_m$RISK_Adjustment - lmod_predict))
+
+# Look at some diagnostic plots
+# Residuals & Q-Q plot
+par(mfrow = c(2, 2))  # Split the plotting panel into a 2 x 2 grid
+plot(lmod, which = c(1, 2))  # Plot the model information
+```
+
+Using our model to predict the response for the test set, we obtain an SSE of roughly 29.5 billion. The average error ends up being of roughly $3025. The poor performance of our model can be explained by the assumptions of linear regression not being satisfied. The residual plot indicates that the homoscedasticity assumption is not satisfied since our errors do not have constant variance. Furthermore, the Q-Q plot above indicates that the normality assumption is not satisfied.
+
+### Multivariate Adaptive Regression Splines (MARS)
 
 *Multivariate Adaptive Regression Splines*, commonly known as MARS, is a non-parametric way of modelling data using a series of piecewise linear regression models. 
 
@@ -964,7 +1208,7 @@ parameter_grid <- floor(expand.grid(degree = 1:4, nprune = seq(2, 50, by = 5)))
 set.seed(2020)
 
 # Perform cross-validation
-cv_mars_audit <- train(x = complete_train_audit_m[, 1:9], 
+cv_mars_audit <- train(x = complete_train_audit_m[, 2:5], 
                        y = complete_train_audit_m[, 10], 
                        method = "earth",
                        metric = "RMSE",
@@ -1001,7 +1245,7 @@ mars_sse <- sum((complete_test_audit_m$RISK_Adjustment - mars_predict)^2)
 mars_mae <- mean(abs(complete_test_audit_m$RISK_Adjustment - mars_predict))
 ```
 
-We can use our model to predict the response for the test set. Doing this, we obtain an SSE of roughly 30.8 billion, which is extremely high but is still lower than what we obtained with OLS. On average, this works out to an error of roughly $2800. 
+We can use our model to predict the response for the test set. Doing this, we obtain an SSE of roughly 30.8 billion (which is extremely high and is slightly higher than what we obtained with OLS). On average, this works out to an error of roughly $2850. It is possible that we overfit our training data.
 
 Below, we plot the residuals, and observe that the assumptions for linear regression are very clearly violated. In order for the MARS algorithm to be successful at modelling non-linear data, the data still must be linear enough in small sections that piecewise linear regression would be useful. This is **not** the case with our data, as evidenced by our residual plot.
 
@@ -1176,9 +1420,141 @@ kable(results) %>%
 
 We can see that, in both cases, the zero-inflated models resulted in much smaller values for the SSE. The mean absolute errors were lower with the standard GLMs. 
 
+### Neural Networks
+
+Lastly, we use neural networks to predict the `RISK_Adjustment` response variable. We will follow the same methods as we did when we used neural networks for classification (tuning parameters via the `ANN2` package). The boxplots below show the SSEs on the test set for the various parameter combinations, grouped by optimization technique. 
+
+```{r, eval = FALSE}
+# Set seed for reproducibility
+set.seed(24)
+
+# Convert categorical variables to one-hot encoded variables
+one_hot_train <- model.matrix(object = RISK_Adjustment ~ . - 1, 
+                                data = complete_train_audit_m)
+one_hot_test <- model.matrix(object = RISK_Adjustment ~ . - 1, 
+                             data = complete_test_audit_m)
+
+# Create a parameter tuning "grid" 
+parameter_grid <- expand.grid(activ.functions = c("tanh", "sigmoid", "relu", "linear"),
+                              optim.type = c("sgd", "rmsprop", "adam"),
+                              L2 = seq(0, 1, by = 0.1))
+
+nn_sse <- vector(length = nrow(parameter_grid))
+nn_mae <- vector(length = nrow(parameter_grid))
+for (i in 1:nrow(parameter_grid)) {
+  # Create neural network
+  audit_nn <- neuralnetwork(X = one_hot_train, 
+                            y = complete_train_audit_m[, 10], 
+                            hidden.layers = NA, 
+                            loss.type = "squared", 
+                            regression = TRUE,
+                            activ.functions = as.character(parameter_grid$activ.functions[i]),
+                            optim.type = as.character(parameter_grid$optim.type[i]), 
+                            L2 = parameter_grid$L2[i])
+  
+  nn_predict <- predict(audit_nn, newdata = one_hot_test)$predictions[, 1]
+  
+  # Get the SSE 
+  nn_sse[i] <- sum((complete_test_audit_m$RISK_Adjustment - nn_predict)^2)
+
+  # Get the mean absolute error 
+  nn_mae[i] <- mean(abs(complete_test_audit_m$RISK_Adjustment - nn_predict))
+}
+
+# Save results
+save(nn_sse, file = "nn_sse.RDa")
+save(nn_mae, file = "nn_mae.RDa")
+
+# Find parameters for the best model
+best_params <- parameter_grid[85, ]
+
+# Set seed for reproducibility 
+set.seed(94)
+
+# Play around with more neurons 
+num_neurons <- seq(2, 64, by = 1)
+nn_sse_2 <- vector(length = length(num_neurons))
+nn_mae_2 <- vector(length = length(num_neurons))
+for (i in 1:6) {
+  # Create neural network
+  audit_nn <- neuralnetwork(X = one_hot_train, 
+                            y = complete_train_audit_m[, 10], 
+                            hidden.layers = num_neurons[i], 
+                            loss.type = "squared", 
+                            regression = TRUE,
+                            activ.functions = as.character(best_params$activ.functions),
+                            optim.type = as.character(best_params$optim.type), 
+                            L2 = best_params$L2)
+
+  nn_predict <- predict(audit_nn, newdata = one_hot_test)$predictions[, 1]
+  
+  # Get the SSE 
+  nn_sse_2[i] <- sum((complete_test_audit_m$RISK_Adjustment - nn_predict)^2)
+
+  # Get the mean absolute error 
+  nn_mae_2[i] <- mean(abs(complete_test_audit_m$RISK_Adjustment - nn_predict))
+}
+
+# Save results
+save(nn_sse_2, file = "nn_sse_2.RDa")
+save(nn_mae_2, file = "nn_mae_2.RDa")
+```
+
+```{r}
+# Load results 
+load("nn_sse.RDa")
+load("nn_mae.RDa")
+
+# Create data frame of results from varying parameters (in order to plot with ggplot)
+nn_results <- data.frame(SSE = nn_sse, MAE = nn_mae, 
+                         optim.type = rep(rep(c("sgd", "rmsprop", "adam"), each = 4), 11))
+
+# Create boxplot of SSE, grouped by optimization algorithm
+ggplot(data = nn_results, aes(y = SSE, fill = optim.type)) +
+  geom_boxplot() + 
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+```
+
+We notice that stochastic gradient descent performed best on average. We'll now select the lowest SSE in the stochastic gradient descent category (hyperbolic tangent activation function with $\lambda = 0.7$ for L2 regularization) and add a hidden layer, experimenting with the number of hidden neurons. The results are shown below.  
+
+```{r}
+# Load results
+load("nn_sse_2.RDa")
+load("nn_mae_2.RDa")
+
+# Create data frame of results from varying number of hidden neurons (in order to use ggplot)
+nn_results <- data.frame(value = c(nn_sse_2, nn_mae_2), 
+                         type = as.factor(rep(c("SSE", "MAE"), each = length(nn_sse_2))), 
+                         num_neurons = rep(seq(2, 64, by = 1), 2))
+
+nn_results <- data.frame(SSE = nn_sse_2, MAE = nn_mae_2,
+                         num_neurons = seq(2, 64, by = 1))
+
+# Create line plot of SSE and MAE as a function of the number of hidden neurons
+ggplot(data = nn_results, aes(x = num_neurons)) + 
+  geom_line(aes(x = num_neurons, y = SSE, colour = I("#F8766D"), alpha = I(0.8))) + 
+  geom_line(aes(x = num_neurons, y = MAE * 9.4e6, colour = I("#00BFC4"), alpha = I(0.5))) + 
+  scale_y_continuous(name = "SSE", sec.axis = sec_axis(~ . / 9.4e6, name = "MAE")) + 
+  theme(axis.line.y.right = element_line(color = "#00BFC4"), 
+        axis.ticks.y.right = element_line(color = "#00BFC4"),
+        axis.text.y.right = element_text(color = "#00BFC4"), 
+        axis.title.y.right = element_text(color = "#00BFC4"),
+        axis.line.y.left = element_line(color = "#F8766D"), 
+        axis.ticks.y.left = element_line(color = "#F8766D"),
+        axis.text.y.left = element_text(color = "#F8766D"), 
+        axis.title.y.left = element_text(color = "#F8766D")) +
+  labs(x = "Number of neurons in hidden layer") + 
+  ggtitle("Performance on Test Data as a Function of Number of Hidden Neurons")
+```
+
+The minimum SSE was achieved with 7 neurons in the hidden layer. The value is 29.05 billion, which is the smallest SSE out of all the methods we have tried. The minimum MAE was reached at a different number of hidden neurons, but was a fairly comparable value (~$3250) to the other methods we tried. 
+
 # References
 
 https://rstudio-pubs-static.s3.amazonaws.com/202050_60f5c6dd1b884ba3ac29f1aef5c848bb.html
+
+
 
 
 
